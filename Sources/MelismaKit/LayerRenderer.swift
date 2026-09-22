@@ -84,6 +84,12 @@ final class GlyphLayers {
     let padding: Double
     private var appliedGlowRadius = -1.0
     private var appliedGlowColor: LyricsColor?
+    private var glowFiltersInstalled = false
+    private var lastPosition = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+    private var lastScale = Double.nan
+    private var lastGradientStart = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+    private var lastGradientEnd = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+    private var lastGlowOpacity = -1.0
     private var blendKey = ""
     func updateBlend(active: Bool, config: LyricsConfiguration) {
         let base = config.channelBlend.isExplicit ? (active ? config.channelBlend.current : config.channelBlend.inactive) : nil
@@ -107,17 +113,19 @@ final class GlyphLayers {
         // mask after the blur would clip the halo back to the glyph silhouette;
         // the bitmap's padding provides the bounded expansion area instead.
         glow.contents = bitmap.image; glow.contentsScale = scale; glow.contentsGravity = .resize
-        glow.filters = glowBlur.map { [$0] }
-        // Emphasis is a light contribution, not an opaque second ink pass.
-        // Addition compositing keeps the halo additive over the lyric/backdrop
-        // and matches the intended plus-lighter glow semantics.
-        glow.compositingFilter = CIFilter(name:"CIAdditionCompositing")
+        // Do not install the Core Image filter graph until the glyph actually
+        // emits a visible glow. Most visible glyphs are inactive on most
+        // frames; keeping a Gaussian blur, monochrome filter and additive
+        // compositor attached to every one of them needlessly expands the
+        // high-DPI Core Animation render passes.
+        glow.filters = nil
+        glow.compositingFilter = nil
         glow.backgroundColor = nil
         appliedGlowColor = nil
         gradient.startPoint = CGPoint(x:0,y:0.5); gradient.endPoint = CGPoint(x:1,y:0.5)
         gradient.colors = [NSColor.white.cgColor,NSColor.white.cgColor,NSColor.clear.cgColor,NSColor.clear.cgColor]
     }
-    func update(now: Double, media: Double, logicalX: Double, cursor: Double, fade: Double, darkAlpha: Double, brightAlpha: Double, emphasis: EmphasisEnvelope?, fontSize: Double, config: LyricsConfiguration, float: Double, background: Bool = false, subline: Bool = false, lifetime: Double = 1, floatLifetime: Double? = nil, emphasisExitMedia: Double? = nil, emphasisExitElapsed: Double? = nil, baseVisible: Bool = true, highlightVisible: Bool = true, glowVisible: Bool = true, lineTimed: Bool = false, discreteOpacity: Double? = nil) {
+    func update(now: Double, media: Double, logicalX: Double, cursor: Double, fade: Double, darkAlpha: Double, brightAlpha: Double, emphasis: EmphasisEnvelope?, fontSize: Double, config: LyricsConfiguration, float: Double, background: Bool = false, subline: Bool = false, lifetime: Double = 1, floatLifetime: Double? = nil, emphasisExitMedia: Double? = nil, emphasisExitElapsed: Double? = nil, baseVisible: Bool = true, highlightVisible: Bool = true, glowVisible: Bool = true, lineTimed: Bool = false, discreteOpacity: Double? = nil, animateGradient: Bool = true) {
         x.resolve(now); y.resolve(now)
         var e = EmphasisSample()
         if config.emphasis, let emphasis, let character = placement.characterIndex {
@@ -130,8 +138,15 @@ final class GlyphLayers {
         // Float is an independent element animation. During an exit its
         // lifetime must not collapse together with the highlight fade, or a
         // line will snap down before the authored exit motion has finished.
-        root.position = CGPoint(x:x.value(now)-padding+w/2+e.x,y:y.value(now)-padding+root.bounds.height/2+e.y+e.floatY*motionLifetime+float*motionLifetime)
-        root.transform = CATransform3DMakeScale(e.scale,e.scale,1)
+        let position = CGPoint(x:x.value(now)-padding+w/2+e.x,y:y.value(now)-padding+root.bounds.height/2+e.y+e.floatY*motionLifetime+float*motionLifetime)
+        if position != lastPosition {
+            root.position = position
+            lastPosition = position
+        }
+        if !lastScale.isFinite || abs(lastScale-e.scale) > 0.0001 {
+            root.transform = CATransform3DMakeScale(e.scale,e.scale,1)
+            lastScale = e.scale
+        }
         let baseColor: LyricsColor, highColor: LyricsColor
         if let discreteOpacity, !subline, !lineTimed {
             let opacity = min(1, max(0, discreteOpacity.isFinite ? discreteOpacity : 0))
@@ -196,39 +211,93 @@ final class GlyphLayers {
         // samples the window backdrop, and glyph edges are masked only once.
         let mode = config.channelBlend.highlight ?? .normal
         let key = InkKey(base:baseColor,high:highColor,baseAlpha:baseOpacity,highAlpha:highlightOpacity,mode:mode)
-        if key != inkKey {
+        // The smooth highlight solver approaches its target asymptotically.
+        // Once the color delta is below half a 1/2048 step, resubmitting the
+        // same nine-color gradient only creates another Core Animation layer
+        // commit; it cannot produce a visible pixel change at the backing
+        // scales used by the player. Keep the exact value when a real change
+        // crosses the threshold so the displayed effect and its timing remain
+        // continuous without introducing a frame-rate cap.
+        let inkChanged: Bool = {
+            guard let previous = inkKey else { return true }
+            return previous.base != key.base
+                || previous.high != key.high
+                || previous.mode != key.mode
+                || abs(previous.baseAlpha - key.baseAlpha) >= 0.00048828125
+                || abs(previous.highAlpha - key.highAlpha) >= 0.00048828125
+        }()
+        if inkChanged {
             inkKey = key
             let colors = (0...8).map { i in
                 compositeInk(base:baseColor,highlight:highColor,baseAlpha:baseOpacity,highlightAlpha:highlightOpacity*Double(8-i)/8,mode:mode)
             }
             if colors != inkColors { inkColors = colors; gradient.colors = colors.map(\.cgColor) }
         }
-        let boundary = min(root.bounds.width+fade,max(-fade,cursor-logicalX-placement.origin.x+padding))
-        gradient.startPoint = CGPoint(x:(boundary-fade/2)/max(1,w),y:0.5)
-        gradient.endPoint = CGPoint(x:(boundary+fade/2)/max(1,w),y:0.5)
-        glow.opacity = config.glow && !config.coverBlurSuppressEmphasisGlow && glowVisible ? Float(e.glowOpacity) : 0
+        // Inactive rows keep their existing mask state. Rewriting gradient
+        // endpoints on every display tick makes Core Animation re-encode the
+        // whole gradient layer tree, which is disproportionately expensive on
+        // high-resolution displays.
+        if animateGradient {
+            let boundary = min(root.bounds.width+fade,max(-fade,cursor-logicalX-placement.origin.x+padding))
+            let gradientStart = CGPoint(x:(boundary-fade/2)/max(1,w),y:0.5)
+            let gradientEnd = CGPoint(x:(boundary+fade/2)/max(1,w),y:0.5)
+            if gradientStart != lastGradientStart {
+                gradient.startPoint = gradientStart
+                lastGradientStart = gradientStart
+            }
+            if gradientEnd != lastGradientEnd {
+                gradient.endPoint = gradientEnd
+                lastGradientEnd = gradientEnd
+            }
+        }
+        let wantsGlow = config.glow
+            && !config.coverBlurSuppressEmphasisGlow
+            && glowVisible
+            && e.glowOpacity > 0.0001
+        let glowOpacity = wantsGlow ? e.glowOpacity : 0
+        if abs(lastGlowOpacity-glowOpacity) > 0.0001 {
+            glow.opacity = Float(glowOpacity)
+            lastGlowOpacity = glowOpacity
+        }
         // The image alpha is the glow source. Its transparent padding bounds
         // the blur expansion while keeping the glyph silhouette as the only
         // painted source; the tile itself is never filled as a rectangle.
-        let glowRadius = e.glowRadius
-        let glowColorChanged = appliedGlowColor != config.palette.emphasisGlow
-        if glowColorChanged {
-            appliedGlowColor = config.palette.emphasisGlow
-            if let color = CIFilter(name:"CIColorMonochrome") {
-                color.setValue(CIColor(cgColor:config.palette.emphasisGlow.cgColor),forKey:kCIInputColorKey)
-                color.setValue(1,forKey:kCIInputIntensityKey)
-                glowBlur?.setValue(appliedGlowRadius >= 0 ? appliedGlowRadius : glowRadius,forKey:kCIInputRadiusKey)
-                glow.filters = [color,glowBlur].compactMap { $0?.copy() as? CIFilter }
+        if wantsGlow {
+            if !glowFiltersInstalled {
+                glowFiltersInstalled = true
+                appliedGlowRadius = -1
+                appliedGlowColor = nil
+                // Emphasis is a light contribution, not an opaque second ink
+                // pass. Addition compositing keeps the halo additive over the
+                // lyric/backdrop and matches the intended plus-lighter glow.
+                glow.compositingFilter = CIFilter(name:"CIAdditionCompositing")
             }
-        }
-        if glow.opacity > 0 && abs(appliedGlowRadius-glowRadius)>0.001 {
-            appliedGlowRadius = glowRadius
-            glowBlur?.setValue(appliedGlowRadius,forKey:kCIInputRadiusKey)
-            if let color = CIFilter(name:"CIColorMonochrome") {
-                color.setValue(CIColor(cgColor:config.palette.emphasisGlow.cgColor),forKey:kCIInputColorKey)
-                color.setValue(1,forKey:kCIInputIntensityKey)
-                glow.filters = [color,glowBlur].compactMap { $0?.copy() as? CIFilter }
+            let glowRadius = e.glowRadius
+            let glowColorChanged = appliedGlowColor != config.palette.emphasisGlow
+            if glowColorChanged {
+                appliedGlowColor = config.palette.emphasisGlow
+                if let color = CIFilter(name:"CIColorMonochrome") {
+                    color.setValue(CIColor(cgColor:config.palette.emphasisGlow.cgColor),forKey:kCIInputColorKey)
+                    color.setValue(1,forKey:kCIInputIntensityKey)
+                    glowBlur?.setValue(appliedGlowRadius >= 0 ? appliedGlowRadius : glowRadius,forKey:kCIInputRadiusKey)
+                    glow.filters = [color,glowBlur].compactMap { $0?.copy() as? CIFilter }
+                }
             }
+            if abs(appliedGlowRadius-glowRadius)>0.001 {
+                appliedGlowRadius = glowRadius
+                glowBlur?.setValue(appliedGlowRadius,forKey:kCIInputRadiusKey)
+                if let color = CIFilter(name:"CIColorMonochrome") {
+                    color.setValue(CIColor(cgColor:config.palette.emphasisGlow.cgColor),forKey:kCIInputColorKey)
+                    color.setValue(1,forKey:kCIInputIntensityKey)
+                    glow.filters = [color,glowBlur].compactMap { $0?.copy() as? CIFilter }
+                }
+            }
+        } else if glowFiltersInstalled {
+            glowFiltersInstalled = false
+            glow.filters = nil
+            glow.compositingFilter = nil
+            appliedGlowRadius = -1
+            appliedGlowColor = nil
         }
     }
     func settled(_ time: Double) -> Bool { x.settled(time) && y.settled(time) }
@@ -240,6 +309,7 @@ final class WordLayers {
     let glyphs: [GlyphLayers]
     var x: SpringTrack, y: SpringTrack
     let logicalX: Double
+    private var lastRootPosition = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
     init(_ placement: WordPlacement, logicalX: Double, cache: GlyphCache, scale: Double, previous: WordLayers?, now: Double) {
         self.placement = placement; self.logicalX = logicalX
         x = SpringTrack(previous.map { $0.x.value(now) } ?? placement.rect.minX)
@@ -252,8 +322,13 @@ final class WordLayers {
         root.anchorPoint = .zero
         for glyph in glyphs { root.addSublayer(glyph.root) }
     }
-    func update(now: Double, media: Double, cursor: Double, fade: Double, dark: Double, bright: Double, config: LyricsConfiguration, floatTime: Double, lineFallStartMedia: Double? = nil, lineFallMultiplier: Double? = nil, background: Bool, lifetime: Double, floatLifetime: Double? = nil, emphasisExitMedia: Double? = nil, emphasisExitElapsed: Double? = nil, baseVisible: Bool = true, highlightVisible: Bool = true, glowVisible: Bool = true, lineTimed: Bool = false, discreteOpacity: Double? = nil) {
-        x.resolve(now); y.resolve(now); root.position = CGPoint(x:x.value(now),y:y.value(now))
+    func update(now: Double, media: Double, cursor: Double, fade: Double, dark: Double, bright: Double, config: LyricsConfiguration, floatTime: Double, lineFallStartMedia: Double? = nil, lineFallMultiplier: Double? = nil, background: Bool, lifetime: Double, floatLifetime: Double? = nil, emphasisExitMedia: Double? = nil, emphasisExitElapsed: Double? = nil, baseVisible: Bool = true, highlightVisible: Bool = true, glowVisible: Bool = true, lineTimed: Bool = false, discreteOpacity: Double? = nil, animateGradient: Bool = true) {
+        x.resolve(now); y.resolve(now)
+        let rootPosition = CGPoint(x:x.value(now),y:y.value(now))
+        if rootPosition != lastRootPosition {
+            root.position = rootPosition
+            lastRootPosition = rootPosition
+        }
         let duration = max(1,placement.atom.word.range.duration)
         let baseRise = -Curves.easeOut.value(at:Curves.clamp((floatTime-placement.atom.word.range.start)/duration))*placement.fontSize*0.05*(background ? 2 : 1)
         let baseRiseAtFall = lineFallStartMedia.map {
@@ -263,7 +338,7 @@ final class WordLayers {
             baseRiseAtFall.map { $0 * multiplier }
         } ?? baseRise
         for glyph in glyphs {
-            glyph.update(now:now,media:media,logicalX:logicalX,cursor:cursor,fade:fade,darkAlpha:dark,brightAlpha:bright,emphasis:placement.atom.emphasis,fontSize:placement.fontSize,config:config,float:float,background:background,lifetime:lifetime,floatLifetime:floatLifetime,emphasisExitMedia:emphasisExitMedia,emphasisExitElapsed:emphasisExitElapsed,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:glowVisible,lineTimed:lineTimed,discreteOpacity:discreteOpacity)
+            glyph.update(now:now,media:media,logicalX:logicalX,cursor:cursor,fade:fade,darkAlpha:dark,brightAlpha:bright,emphasis:placement.atom.emphasis,fontSize:placement.fontSize,config:config,float:float,background:background,lifetime:lifetime,floatLifetime:floatLifetime,emphasisExitMedia:emphasisExitMedia,emphasisExitElapsed:emphasisExitElapsed,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:glowVisible,lineTimed:lineTimed,discreteOpacity:discreteOpacity,animateGradient:animateGradient)
         }
     }
     func settled(_ time: Double) -> Bool { x.settled(time) && y.settled(time) && glyphs.allSatisfy { $0.settled(time) } }
@@ -284,6 +359,10 @@ final class LineLayers {
     private(set) var renderedCursor = 0.0
     private var emphasisExitMedia: Double?
     private var emphasisExitHost: Double?
+    private var lastRootAnchor: CGPoint?
+    private var lastRootPosition: CGPoint?
+    private var lastRootScale: Double?
+    private var lastRootOpacity: Float?
     init(_ layout: LineTextLayout, cache: GlyphCache, scale: Double, config: LyricsConfiguration, previous: LineLayers?, now: Double, buildContent: Bool = true, preserveWordMotion: Bool = true) {
         self.layout = layout; fade = max(0.01,(layout.words.first?.fadeHeight ?? layout.fontSize*1.2)*config.wordFadeWidth)
         mask = MaskPath(layout.words,fadeWidth:fade)
@@ -309,6 +388,26 @@ final class LineLayers {
     func discardContent() {
         words.forEach { $0.root.removeFromSuperlayer() }; sublines.forEach { $0.root.removeFromSuperlayer() }
         words.removeAll(); sublines.removeAll()
+    }
+    func setPresentation(anchor: CGPoint, position: CGPoint, scale: Double) {
+        if lastRootAnchor != anchor {
+            root.anchorPoint = anchor
+            lastRootAnchor = anchor
+        }
+        if lastRootPosition != position {
+            root.position = position
+            lastRootPosition = position
+        }
+        if lastRootScale.map({ abs($0-scale) > 0.0001 }) ?? true {
+            root.transform = CATransform3DMakeScale(scale,scale,1)
+            lastRootScale = scale
+        }
+    }
+    func setOpacity(_ opacity: Float) {
+        if lastRootOpacity != opacity {
+            root.opacity = opacity
+            lastRootOpacity = opacity
+        }
     }
     private func build(cache: GlyphCache, scale: Double, config: LyricsConfiguration, previous: LineLayers?, now: Double) {
         var logical = 0.0
@@ -346,6 +445,10 @@ final class LineLayers {
         let lifetime = highlight.value(now)
         let visualActive = keepHighlight || highlightHold
         let highlightLifetime = preserveHighlight ? 1 : lifetime
+        // Only the active row and its short exit transition need a moving
+        // karaoke mask. Future/settled rows can leave their gradient endpoints
+        // untouched until they re-enter this state.
+        let animateGradient = visualActive || highlightLifetime > 0.001
         let smooth = layout.isDynamic && !config.lineTimingOnly && config.highlightMode == .smooth
         // Discrete mode is a presentation choice, not a statement that the
         // source must contain independent word spans.  A line-timed document
@@ -431,11 +534,11 @@ final class LineLayers {
                 ? word.placement.rect.maxX + fade + 1
                 : maskCursor
             let lineTimed = !layout.isDynamic && !config.lineTimingOnly && !discrete
-            word.update(now:now,media:media,cursor:wordCursor,fade:fade,dark:wordDark,bright:wordBright,config:config,floatTime:config.lineTimingOnly ? -1e9 : floatTime,lineFallStartMedia:lineFallStartMedia,lineFallMultiplier:lineFallMultiplier,background:background,lifetime:wordLifetime,floatLifetime:floatLifetime,emphasisExitMedia:emphasisExitMedia,emphasisExitElapsed:exitElapsed,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:glowVisible,lineTimed:lineTimed,discreteOpacity:discreteOpacity)
+            word.update(now:now,media:media,cursor:wordCursor,fade:fade,dark:wordDark,bright:wordBright,config:config,floatTime:config.lineTimingOnly ? -1e9 : floatTime,lineFallStartMedia:lineFallStartMedia,lineFallMultiplier:lineFallMultiplier,background:background,lifetime:wordLifetime,floatLifetime:floatLifetime,emphasisExitMedia:emphasisExitMedia,emphasisExitElapsed:exitElapsed,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:glowVisible,lineTimed:lineTimed,discreteOpacity:discreteOpacity,animateGradient:animateGradient)
             for glyph in word.glyphs { glyph.updateBlend(active:keepHighlight,config:config) }
         }
         for subline in sublines {
-            subline.update(now:now,media:media,logicalX:0,cursor:1e9,fade:1,darkAlpha:0.3,brightAlpha:0.3,emphasis:nil,fontSize:layout.fontSize,config:config,float:0,background:background,subline:true,lifetime:highlightLifetime,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:false,lineTimed:!layout.isDynamic && !config.lineTimingOnly && !discrete)
+            subline.update(now:now,media:media,logicalX:0,cursor:1e9,fade:1,darkAlpha:0.3,brightAlpha:0.3,emphasis:nil,fontSize:layout.fontSize,config:config,float:0,background:background,subline:true,lifetime:highlightLifetime,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:false,lineTimed:!layout.isDynamic && !config.lineTimingOnly && !discrete,animateGradient:false)
             subline.updateBlend(active:keepHighlight,config:config)
         }
     }
@@ -482,6 +585,16 @@ final class GroupLayers {
     var blurFilter: CIFilter?
     var appliedBlur = 0.0
     private var compositorKey = ""
+    private var lastRootPosition: CGPoint?
+    private var lastRootOpacity: Float?
+    private var lastRootBounds: CGRect?
+    private var lastRootHidden: Bool?
+    private var lastHoverFrame: CGRect?
+    private var lastHoverHidden: Bool?
+    private var lastBackgroundPosition: CGPoint?
+    private var lastBackgroundOpacity: Float?
+    private var rasterizationEnabled = false
+    private var lastRasterizationScale = CGFloat.nan
     private let lighterCompositor = CIFilter(name:"CIAdditionCompositing")
     private let darkerCompositor = CIFilter(name:"CILinearBurnBlendMode")
     init(index: Int, layout: GroupTextLayout, initialY: Double, cache: GlyphCache, scale: Double, config: LyricsConfiguration, now: Double) {
@@ -492,6 +605,216 @@ final class GroupLayers {
         root.addSublayer(hover); root.addSublayer(main.root); root.addSublayer(backgroundWrapper)
         if let background { backgroundWrapper.addSublayer(background.root) }
         backgroundWrapper.anchorPoint = .zero
+    }
+    func setPresentation(position: CGPoint, opacity: Float, bounds: CGRect, hidden: Bool, hoverFrame: CGRect, hoverHidden: Bool) {
+        if lastRootPosition != position {
+            root.position = position
+            lastRootPosition = position
+        }
+        if lastRootOpacity != opacity {
+            root.opacity = opacity
+            lastRootOpacity = opacity
+        }
+        if lastRootBounds != bounds {
+            root.bounds = bounds
+            lastRootBounds = bounds
+        }
+        if lastRootHidden != hidden {
+            root.isHidden = hidden
+            lastRootHidden = hidden
+        }
+        if lastHoverFrame != hoverFrame {
+            hover.frame = hoverFrame
+            lastHoverFrame = hoverFrame
+        }
+        if lastHoverHidden != hoverHidden {
+            hover.isHidden = hoverHidden
+            lastHoverHidden = hoverHidden
+        }
+    }
+    func setBackgroundPresentation(position: CGPoint, opacity: Float) {
+        if lastBackgroundPosition != position {
+            backgroundWrapper.position = position
+            lastBackgroundPosition = position
+        }
+        if lastBackgroundOpacity != opacity {
+            backgroundWrapper.opacity = opacity
+            lastBackgroundOpacity = opacity
+        }
+    }
+    /// Cache a settled, inactive lyric group at the exact backing scale. The
+    /// active row remains a live layer tree, while static rows can move with
+    /// the window without forcing Core Animation to walk every glyph/filter
+    /// layer on each display-cycle commit.
+    func setRasterized(_ enabled: Bool, scale: Double) {
+        let resolvedScale = max(0.5, CGFloat(scale.isFinite ? scale : 1))
+        if rasterizationEnabled != enabled {
+            root.shouldRasterize = enabled
+            rasterizationEnabled = enabled
+        }
+        guard enabled, abs(lastRasterizationScale - resolvedScale) > 0.0001 else { return }
+        root.rasterizationScale = resolvedScale
+        lastRasterizationScale = resolvedScale
+    }
+
+    var isRasterized: Bool { rasterizationEnabled }
+
+    func disableRasterization() {
+        setRasterized(false, scale: 1)
+        unbakeBlur()
+    }
+
+    // MARK: - Baked row blur
+
+    /// A settled, inactive row keeps a constant blur radius, so its blurred
+    /// appearance is a fixed image. `CALayer.filters` cannot exploit that: the
+    /// render server evaluates a filter chain on every composite of the layer,
+    /// and `shouldRasterize` only caches the layer content *before* filters are
+    /// applied. A static blurred row therefore costs a Gaussian pass on every
+    /// display refresh even while the host is idle and nothing on screen
+    /// changes. Rendering the row once, blurring that bitmap and installing it
+    /// as the row contents yields the same pixels with no per-frame filter work.
+    private var bakedBlurRadius = Double.nan
+    private var bakedBlurScale = Double.nan
+    private var bakedBlurHidden: [CALayer] = []
+    var isBlurBaked: Bool { !bakedBlurHidden.isEmpty }
+
+    /// `radius` is a live `CIGaussianBlur` radius, and a layer filter is measured
+    /// in the backing pixels the compositor works in — not in the row's own
+    /// render scale. `scale` must therefore be the display backing scale, so the
+    /// snapshot reproduces "upscale to the display, then blur" exactly. Rendering
+    /// at the (lower) lyrics render scale and blurring there produced a blur of
+    /// `radius * backingScale / renderScale` once the bitmap was stretched to the
+    /// display, and the row visibly changed sharpness every time it switched
+    /// between the baked and the live path.
+    @discardableResult
+    func bakeBlur(radius: Double, scale: Double, renderScale: Double = 1, context: CIContext, colorSpace: CGColorSpace? = nil, tolerance: Double = 0.02) -> Bool {
+        guard radius > 0.01, scale > 0.01 else { unbakeBlur(); return false }
+        // A CALayer filter's `inputRadius` is interpreted in the layer's point
+        // coordinate space, so the compositor displays a blur of
+        // `radius × backingScale` effective pixels. The bake blurs in the
+        // display-scale bitmap, so it must use that same effective value or a
+        // row that switches to the live path visibly softens. Calibrated with
+        // the headless parity harness (bake vs CARenderer live render): the
+        // live edge is ~2× wider at backing scale 2.0, matching radius×scale.
+        // `KMGCCC_BAKE_RADIUS_K` overrides the multiplier for calibration.
+        var radiusMultiplier = scale
+        if let raw = ProcessInfo.processInfo.environment["KMGCCC_BAKE_RADIUS_K"], let k = Double(raw), k > 0.01 {
+            radiusMultiplier = k
+        }
+        let effectiveRadius = radius * radiusMultiplier
+        if isBlurBaked, abs(bakedBlurRadius - radius) <= tolerance, abs(bakedBlurScale - scale) <= 0.0001 { return false }
+        let bounds = root.bounds
+        guard bounds.width > 0.5, bounds.height > 0.5 else { return false }
+        // The blur needs room to expand into, otherwise the row would be
+        // clipped at its edges instead of fading out the way a live filter does.
+        let pad = effectiveRadius * 3 + 2
+        let pixelWidth = Int(((bounds.width + pad * 2) * scale).rounded())
+        let pixelHeight = Int(((bounds.height + pad * 2) * scale).rounded())
+        guard pixelWidth > 0, pixelHeight > 0, pixelWidth <= 8192, pixelHeight <= 8192 else { return false }
+        // A/B knob: render the snapshot at the lyrics render scale and let the
+        // bake upscale it to the display, replicating the live path (content at
+        // renderScale, compositor bilinear-upscales to the display, then the
+        // filter runs in display pixels). Unset keeps the old 1:1 display-scale
+        // snapshot.
+        let snapshotScale: Double = {
+            guard let raw = ProcessInfo.processInfo.environment["KMGCCC_BAKE_SNAPSHOT_SCALE"],
+                  let value = Double(raw), value > 0.01, abs(value - scale) > 0.001
+            else { return scale }
+            return min(2, value)
+        }()
+        let snapshotPixelWidth = Int(((bounds.width + pad * 2) * snapshotScale).rounded())
+        let snapshotPixelHeight = Int(((bounds.height + pad * 2) * snapshotScale).rounded())
+        guard snapshotPixelWidth > 0, snapshotPixelHeight > 0 else { return false }
+        guard let snapshotCtx = CGContext(
+            data: nil,
+            width: snapshotPixelWidth,
+            height: snapshotPixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else { return false }
+        // Snapshot the live subtree, so it has to be visible first and it must not
+        // still carry the previous bitmap or a live filter: otherwise the new
+        // bitmap would composite stale pixels underneath the current content, and
+        // a re-bake taken from already hidden layers would come out empty. Clearing
+        // the baked state up front also means any failure below leaves the row on
+        // the live path, where the caller reinstalls the filter in this same frame.
+        bakedBlurHidden.forEach { $0.isHidden = false }
+        bakedBlurHidden.removeAll(keepingCapacity: true)
+        root.contents = nil
+        root.filters = nil
+        appliedBlur = 0
+        let pointWidth = bounds.width + pad * 2
+        let pointHeight = bounds.height + pad * 2
+        snapshotCtx.scaleBy(x: CGFloat(snapshotScale), y: CGFloat(snapshotScale))
+        // Bitmap rows run top-down while the layer draws bottom-up.
+        snapshotCtx.translateBy(x: 0, y: CGFloat(pointHeight))
+        snapshotCtx.scaleBy(x: 1, y: -1)
+        snapshotCtx.translateBy(x: CGFloat(pad), y: CGFloat(pad))
+        root.render(in: snapshotCtx)
+        guard let snapshot = snapshotCtx.makeImage() else { return false }
+        // Replicate the compositor's magnification: content rasterized at the
+        // lyrics render scale is upscaled to the display with bilinear
+        // interpolation. Draw the snapshot into a display-scale context.
+        var raw = snapshot
+        if abs(snapshotScale - scale) > 0.001 {
+            guard let upscaleCtx = CGContext(
+                data: nil,
+                width: pixelWidth,
+                height: pixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            ) else { return false }
+            upscaleCtx.interpolationQuality = .medium
+            upscaleCtx.draw(snapshot, in: CGRect(x: 0, y: 0, width: CGFloat(pixelWidth), height: CGFloat(pixelHeight)))
+            guard let upscaled = upscaleCtx.makeImage() else { return false }
+            raw = upscaled
+        }
+        // `inputRadius` for a CALayer filter is measured in backing pixels, not
+        // in points, so the replacement radius must not be pre-multiplied by the
+        // scale again. Blur with the padding in place and crop the padding back
+        // out, so the bitmap maps one-to-one onto the row bounds.
+        let padPixels = pad * scale
+        let contentBounds = CGRect(
+            x: padPixels,
+            y: padPixels,
+            width: bounds.width * scale,
+            height: bounds.height * scale
+        )
+        let blurred = CIImage(cgImage: raw)
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: effectiveRadius])
+            .cropped(to: contentBounds)
+        guard let image = context.createCGImage(blurred, from: contentBounds) else { return false }
+
+        // The live line subtree stays in place and is restored verbatim when the
+        // row leaves the settled state again. `hover` is deliberately left alone:
+        // it draws above `root.contents` and owns its own visibility, so hiding or
+        // restoring it here would strand the hover highlight on a row that is no
+        // longer hovered.
+        bakedBlurHidden = [main.root, backgroundWrapper]
+        bakedBlurHidden.forEach { $0.isHidden = true }
+        root.contents = image
+        root.contentsScale = CGFloat(scale)
+        root.contentsGravity = .resize
+        bakedBlurRadius = radius
+        bakedBlurScale = scale
+        return true
+    }
+
+    func unbakeBlur() {
+        guard isBlurBaked else { return }
+        bakedBlurHidden.forEach { $0.isHidden = false }
+        bakedBlurHidden.removeAll(keepingCapacity: true)
+        root.contents = nil
+        bakedBlurRadius = .nan
+        bakedBlurScale = .nan
+        // Let the next frame reinstall the live filter for the current radius.
+        appliedBlur = 0
     }
     func updateCompositor(_ config: LyricsConfiguration) {
         if config.channelBlend.isExplicit { root.compositingFilter = nil; compositorKey = ""; return }
@@ -514,6 +837,7 @@ final class GroupLayers {
         }
     }
     func reflow(_ layout: GroupTextLayout, cache: GlyphCache, scale: Double, config: LyricsConfiguration, now: Double) {
+        disableRasterization()
         let oldMain = main, oldBG = background
         main = LineLayers(layout.main,cache:cache,scale:scale,config:config,previous:oldMain,now:now,buildContent:!oldMain.words.isEmpty,preserveWordMotion:false)
         background = layout.background.map { LineLayers($0,cache:cache,scale:scale,config:config,previous:oldBG,now:now,buildContent:!(oldBG?.words.isEmpty ?? true),preserveWordMotion:false) }
@@ -522,6 +846,27 @@ final class GroupLayers {
         self.layout = layout; isReflowing = true; reflowTarget = nil
     }
     func settled(_ time: Double) -> Bool {
-        y.settled(time) && scale.settled(time) && reveal.settled(time) && opacity.settled(time) && blur.settled(time) && main.settled(time) && (background?.settled(time) ?? true) && (exitTime.map { time-$0>2 } ?? true)
+        bakedContentIsStatic(time) && y.settled(time) && opacity.settled(time) && blur.settled(time)
+    }
+
+    /// Everything a baked bitmap actually freezes: the line's own position and
+    /// scale inside the row box, its glyph positions and masks, and the exit
+    /// fall. The row box itself (`root.position`/`root.bounds`) and
+    /// `root.opacity` stay live, so scrolling the stack and fading the row do
+    /// not require a new snapshot — only a change inside the box does.
+    ///
+    /// The blur radius is excluded on purpose. A blurred row is always rendered
+    /// from its bitmap and gets its radius from a re-bake, so the blur ramp must
+    /// not disqualify a row from being snapshotted; otherwise every focus change
+    /// would hand the row back to a live filter.
+    func bakedContentIsStatic(_ time: Double) -> Bool {
+        // The exit fall keeps moving glyphs for `lyricLineFallDuration`, which is
+        // longer than the highlight fade and the position springs. Freezing a row
+        // before it finishes lets the frozen offset disagree with the model, and
+        // the row snaps whenever live updates resume (a configuration change, a
+        // reflow, or the row re-entering the animated state).
+        scale.settled(time) && reveal.settled(time) && main.settled(time)
+            && (background?.settled(time) ?? true)
+            && (exitTime.map { time-$0>lyricLineFallDuration } ?? true)
     }
 }

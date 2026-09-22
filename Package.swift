@@ -9,7 +9,8 @@ let package = Package(
         .library(name: "MelismaKitSwiftUI", targets: ["MelismaKitSwiftUI"]),
         .executable(name: "MelismaKitDemo", targets: ["MelismaKitDemo"]),
         .executable(name: "MelismaKitProbe", targets: ["MelismaKitProbe"]),
-        .executable(name: "MelismaKitBench", targets: ["MelismaKitBench"])
+        .executable(name: "MelismaKitBench", targets: ["MelismaKitBench"]),
+        .executable(name: "MelismaKitParity", targets: ["MelismaKitParity"])
     ],
     targets: [
         .target(name: "MelismaKit"),
@@ -18,6 +19,7 @@ let package = Package(
         .executableTarget(name: "MelismaKitProbe", dependencies: ["MelismaKit", "MelismaKitBenchCore"]),
         .target(name: "MelismaKitBenchCore", dependencies: ["MelismaKit"]),
         .executableTarget(name: "MelismaKitBench", dependencies: ["MelismaKit", "MelismaKitBenchCore"]),
+        .executableTarget(name: "MelismaKitParity", dependencies: ["MelismaKit", "MelismaKitBenchCore"]),
         .testTarget(name: "MelismaKitTests", dependencies: ["MelismaKit", "MelismaKitBenchCore"], resources: [.copy("Fixtures")])
     ],
     swiftLanguageModes: [.v5]

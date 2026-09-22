@@ -77,6 +77,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     public var configuration = LyricsConfiguration() {
         didSet {
             guard configuration != oldValue else { return }
+            groups.forEach { $0.disableRasterization() }
             if configuration.timing != oldValue.timing || configuration.profile != oldValue.profile || configuration.preserveCompletedHighlight != oldValue.preserveCompletedHighlight { rebuildTimeline() }
             let c = configuration, o = oldValue
             if c.fontName != o.fontName || c.fontNameCJK != o.fontNameCJK || c.fontSize != o.fontSize || c.fontWeight != o.fontWeight
@@ -166,6 +167,30 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     private var entryAnimationHandoffUntil = 0.0
     private var rendering = false
     private var scrollBoundary = (min: 0.0, max: 0.0)
+    // Debug-only: halt the display link on the exact frame a row flips between
+    // the baked and the live blur path, so the switch-instant state can be
+    // screenshotted. `KMGCCC_LYRICS_HALT=unbake` halts when a row stops being
+    // baked (live path takes over); `KMGCCC_LYRICS_HALT=bake` halts when a row
+    // becomes baked. Remove together with this comment once the parity work is
+    // done.
+    private static let haltSwitch = ProcessInfo.processInfo.environment["KMGCCC_LYRICS_HALT"] ?? ""
+    private static let haltAfterSec = Double(ProcessInfo.processInfo.environment["KMGCCC_LYRICS_HALT_AFTER"] ?? "") ?? 0
+    private var haltBakedState: [Int: Bool] = [:]
+    private var haltPlayStart: Double = .infinity
+    // These layers are touched from the display link, but most of their
+    // presentation values are static between a resize/configuration change.
+    // Avoid re-submitting identical values to Core Animation: the lyric tree
+    // shares the window's transaction and redundant setters can invalidate
+    // unrelated surfaces while the window is being dragged or scrolled.
+    private var lastContentFrame: CGRect?
+    private var lastBackdropColor: LyricsColor?
+    private var hasAppliedBackdropColor = false
+    private var lastContentOpacity: Double?
+    private var lastBottomText: String?
+    private var lastBottomFontSize: CGFloat?
+    private var lastBottomContentsScale: CGFloat?
+    private var lastBottomFrame: CGRect?
+    private var dotsHidden: Bool?
 
     private var entryPositionSpring: SpringParameters {
         // Entry motion must retain a real under-damped position solver. A
@@ -435,6 +460,11 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         let requestedRenderScale = configuration.renderScale.isFinite ? configuration.renderScale : 1
         let renderScale = min(1,max(0.35,requestedRenderScale))
         let scale = backingScale * renderScale
+        // The compositor works in the display's color space; rasterizing the
+        // snapshot in a different one shifts the row's colour and brightness,
+        // which is visible as a small change every time a row switches between
+        // the baked bitmap and the live layer.
+        let displayColorSpace = (window?.screen ?? NSScreen.main)?.colorSpace?.cgColorSpace ?? CGColorSpaceCreateDeviceRGB()
         let needsReflow = layoutDirty || lastSize != bounds.size || scale != lastScale
         // AppKit sends a layout pass for every live-resize tick. Keep the
         // existing text shaping while the pointer is still resizing the
@@ -470,10 +500,21 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         } else if reflowInProgress {
             _ = processIncrementalReflow(now: now, scale: scale)
         }
-        content.frame = bounds
-        content.backgroundColor = configuration.backdropColor?.cgColor
+        if lastContentFrame != bounds {
+            content.frame = bounds
+            lastContentFrame = bounds
+        }
+        let backdropColor = configuration.backdropColor
+        if !hasAppliedBackdropColor || lastBackdropColor != backdropColor {
+            content.backgroundColor = backdropColor?.cgColor
+            lastBackdropColor = backdropColor
+            hasAppliedBackdropColor = true
+        }
         let blendOpacity = configuration.blendOpacity.isFinite ? Curves.clamp(configuration.blendOpacity) : 1
-        content.opacity = Float(blendOpacity)
+        if lastContentOpacity.map({ abs($0 - blendOpacity) > 0.0001 }) ?? true {
+            content.opacity = Float(blendOpacity)
+            lastContentOpacity = blendOpacity
+        }
         var focus = snapshot.focus
         if interaction.suspended { focus = interaction.frozenFocus }
         let focusChanged = focus != lastFocus
@@ -572,6 +613,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if immediateSeek { cascadeUntil = 0 }
         let firstVisible = groups.firstIndex { $0.y.value(now)+$0.layout.expandedHeight >= 0 } ?? 0
         var stagger = 0.0, baseDelay = reflowed ? 0 : 0.05
+        // Rows whose bitmap can be produced this frame. Kept small because a bake
+        // rasterizes the row on the CPU, and the blur ramp uses a few of them.
+        var bakeBudget = 3
         var frames: [LyricsGroupFrame] = []
         var leadingXs: [Double] = []
         for (i,group) in groups.enumerated() {
@@ -673,19 +717,16 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 groupAlpha = 1
             }
             group.opacity.set(passed ? 0 : groupAlpha,at:now)
-            group.root.position = CGPoint(x:0,y:y); group.root.opacity = Float(group.opacity.value(now))
-            group.root.bounds = CGRect(x:0,y:0,width:bounds.width,height:heights[i])
-            group.hover.frame = group.root.bounds.insetBy(dx:8,dy:1); group.hover.isHidden = hoveredIndex != i || !configuration.hoverBackground
+            let groupOpacity = Float(group.opacity.value(now))
+            let groupBounds = CGRect(x:0,y:0,width:bounds.width,height:heights[i])
             group.updateCompositor(configuration)
             let blur = group.blur.value(now)
-            if blur>0.01 && abs(blur-group.appliedBlur)>0.001 {
-                if group.blurFilter == nil { group.blurFilter = CIFilter(name:"CIGaussianBlur") }
-                group.blurFilter?.setValue(blur,forKey:kCIInputRadiusKey)
-                // CA copies filter state at assignment. Mutating the same filter
-                // instance can leave the compositor with its first radius.
-                group.root.filters = group.blurFilter.map { [$0.copy() as! CIFilter] }
-                group.appliedBlur = blur
-            } else if blur<=0.01 && group.appliedBlur != 0 { group.root.filters = nil; group.appliedBlur = 0 }
+            // The live filter is installed further down, immediately after the
+            // bake decision, so that a row which stops being baked gets its
+            // filter back inside the same frame. Applying it here instead would
+            // leave the row unblurred for one frame — and because a single focus
+            // change unsettles the blur of every row at once, that one frame
+            // made the whole lyric stack flash sharp before blurring again.
             let pad = bounds.width<=500 ? 20.0 : configuration.fontSize
             let duet = prepared[i].main.isDuet
             let x = duet ? bounds.width-pad-group.layout.main.width : pad
@@ -701,9 +742,11 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             // centre. Anchoring at the top made the inactive shrink also move
             // the visible baseline, which reads as a small positional jitter
             // while the row is moving to its next stack slot.
-            group.main.root.anchorPoint = CGPoint(x:duet ? 1 : 0,y:0.5)
-            group.main.root.position = CGPoint(x:x+(duet ? group.layout.main.width : 0),y:mainY+group.layout.main.height/2)
-            group.main.root.transform = CATransform3DMakeScale(ms,ms,1)
+            group.main.setPresentation(
+                anchor: CGPoint(x:duet ? 1 : 0,y:0.5),
+                position: CGPoint(x:x+(duet ? group.layout.main.width : 0),y:mainY+group.layout.main.height/2),
+                scale: ms
+            )
             let alphaTarget = Curves.clamp((ms-0.97)/0.03)
             group.alpha = alphaTarget
             let parallelHighlight = snapshot.highlighted.contains(i) && !group.active && configuration.preserveCompletedHighlight
@@ -727,11 +770,84 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             let prewarmEntryFocus = runningEntryAnimation != nil && i == entryFocus
             group.isVisible = prewarmEntryFocus
                 || (y+heights[i] >= -configuration.overscan && y<=bounds.height+configuration.overscan)
-            group.root.isHidden = !group.isVisible
+            group.setPresentation(
+                position: CGPoint(x:0,y:y),
+                opacity: groupOpacity,
+                bounds: groupBounds,
+                hidden: !group.isVisible,
+                hoverFrame: groupBounds.insetBy(dx:8,dy:1),
+                hoverHidden: hoveredIndex != i || !configuration.hoverBackground
+            )
+            let active = group.active
+            let presentationActive = snapshot.playing.contains(i) || snapshot.highlighted.contains(i)
+            // Resolve the freeze state before the live content is refreshed. A row
+            // that stops being baked in this frame must refresh its glyph content
+            // in this same frame: un-hiding a subtree whose content was frozen at
+            // bake time and refreshing it one frame later showed a stale frame at
+            // a shifted position, which is what made a hovered row flash and drift
+            // before snapping back.
+            let canRasterize = group.isVisible
+                && !active
+                && !presentationActive
+                && !highlightHold
+                && !parallelHighlight
+                && !seek
+                && !entryMotionActive
+                && !group.isReflowing
+                // A group that is already cached has already passed the
+                // settled check. Avoid walking every glyph again on every
+                // display tick while it remains in the static state.
+                && (group.isRasterized || group.settled(now))
+            // A blurred row is always rendered from its baked bitmap: the live
+            // Core Image filter is never used for a row that carries blur, so
+            // there is no pair of rendering paths that has to agree frame by
+            // frame. The blur radius is followed by re-baking instead of by
+            // handing the row back to a filter, which is what made the blur
+            // flicker several times after a line change — each hand-off was a
+            // switch between two slightly different renderings of the same
+            // nominal radius.
+            // Deliberately not routed through `canRasterize`: that check includes
+            // the blur tween, and a row whose radius is ramping has to stay baked
+            // and be re-blurred, not fall back to a live filter.
+            let canBake = group.isVisible
+                && !active
+                && !presentationActive
+                && !highlightHold
+                && !parallelHighlight
+                && !seek
+                && !entryMotionActive
+                && !group.isReflowing
+                && group.bakedContentIsStatic(now)
+                && blur > 0.01
+                && configuration.bakeSettledBlur
+                // A hovered row would bake the hover tint into the bitmap and
+                // outlive the pointer, so leave it on the live path.
+                && !group.isHovered
+            if !canBake { group.unbakeBlur() }
+            if ProcessInfo.processInfo.environment["KMGCCC_PARITY_DEBUG"] == "1" {
+                print("[parity] i=\(i) canBake=\(canBake) baked=\(group.isBlurBaked) static=\(group.bakedContentIsStatic(now)) visible=\(group.isVisible) active=\(group.active) presActive=\(presentationActive) hh=\(highlightHold) ph=\(parallelHighlight) seek=\(seek) entry=\(entryMotionActive) entryUntil=\(String(format: "%.2f", entryAnimationHandoffUntil)) now=\(String(format: "%.2f", now)) reflow=\(group.isReflowing) hover=\(group.isHovered)")
+            }
+            // Only skip the content refresh while the baked bitmap is what is on
+            // screen. A rasterized row that is not baked still draws its live
+            // subtree, so that subtree has to stay current for the unfreeze to be
+            // seamless.
+            let contentIsFrozenOnScreen = configuration.bakeSettledBlur
+                ? group.isBlurBaked
+                : group.isRasterized
+            let canReuseRasterizedContent = contentIsFrozenOnScreen
+                && !active
+                && !presentationActive
+                && !highlightHold
+                && !parallelHighlight
+                && !seek
+                && !entryMotionActive
+                && !group.isReflowing
             if group.isVisible {
-                group.main.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
-                group.background?.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
-                group.main.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:false,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                if !canReuseRasterizedContent {
+                    group.main.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
+                    group.background?.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
+                    group.main.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:false,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                }
                 if let background = group.background {
                     // For a background-first group, AMLL's negative margin
                     // keeps the visual bottom of the chorus attached to the
@@ -753,15 +869,73 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                     let by = bgFirst
                         ? mainTop-group.layout.gap-background.layout.height*bs
                         : mainBottom+group.layout.gap
-                    group.backgroundWrapper.position = CGPoint(x:x,y:by)
-                    group.backgroundWrapper.opacity = Float(reveal)
-                    background.root.anchorPoint = CGPoint(x:duet ? 1 : 0,y:0)
-                    background.root.position = CGPoint(x:duet ? background.layout.width : 0,y:0)
-                    background.root.transform = CATransform3DMakeScale(bs,bs,1)
-                    background.root.opacity = configuration.usesOpaqueCompositing ? 1 : 0.4
-                    background.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:true,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                    group.setBackgroundPresentation(position: CGPoint(x:x,y:by),opacity: Float(reveal))
+                    background.setPresentation(
+                        anchor: CGPoint(x:duet ? 1 : 0,y:0),
+                        position: CGPoint(x:duet ? background.layout.width : 0,y:0),
+                        scale: bs
+                    )
+                    background.setOpacity(configuration.usesOpaqueCompositing ? 1 : 0.4)
+                    if !canReuseRasterizedContent {
+                        background.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:true,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                    }
                 }
             } else { group.main.discardContent(); group.background?.discardContent() }
+            // The decision was already taken above, before the content refresh;
+            // here the bitmap is produced from the content that was just updated.
+            // A re-bake is needed while the blur radius ramps, so the tolerance is
+            // coarse enough to need only a few re-bakes across a 0.45s transition
+            // (a step of ~0.12 radius is not perceptible), and the budget keeps the
+            // CPU rasterization off the busiest frames.
+            if canBake, bakeBudget > 0,
+               group.bakeBlur(radius: blur, scale: backingScale, renderScale: renderScale, context: imageContext, colorSpace: displayColorSpace, tolerance: 0.12) {
+                bakeBudget -= 1
+            }
+            // A row that is not baked must carry its blur as a live filter, and
+            // it must be reinstalled in this same frame: `unbakeBlur` clears the
+            // applied radius, so deferring to the next frame would show one
+            // unblurred frame whenever a row leaves the baked state (on every
+            // focus change, and again when an exited row stops animating).
+            if !group.isBlurBaked {
+                if blur > 0.01 && abs(blur - group.appliedBlur) > 0.001 {
+                    if group.blurFilter == nil { group.blurFilter = CIFilter(name:"CIGaussianBlur") }
+                    group.blurFilter?.setValue(blur,forKey:kCIInputRadiusKey)
+                    // CA copies filter state at assignment. Mutating the same filter
+                    // instance can leave the compositor with its first radius.
+                    group.root.filters = group.blurFilter.map { [$0.copy() as! CIFilter] }
+                    group.appliedBlur = blur
+                } else if blur <= 0.01 && group.appliedBlur != 0 {
+                    group.root.filters = nil
+                    group.appliedBlur = 0
+                }
+            }
+            // Rasterizing a layer that also carries a live filter is the worst of
+            // both worlds: the raster cache cannot absorb the filter, and the
+            // filter pass keeps the cache hot. In bake mode keep rasterization for
+            // the filter-free static rows only — a baked row is a single image
+            // already, and a row on its live filter must not be flattened too.
+            let rasterizeEligible = configuration.bakeSettledBlur
+                ? (canRasterize && !group.isBlurBaked && blur <= 0.01)
+                : canRasterize
+            group.setRasterized(rasterizeEligible, scale: scale)
+            if !Self.haltSwitch.isEmpty {
+                if clock.isPlaying {
+                    if haltPlayStart.isInfinite { haltPlayStart = now }
+                } else {
+                    haltPlayStart = .infinity
+                }
+                let armed = Self.haltAfterSec <= 0 || (now - haltPlayStart) >= Self.haltAfterSec
+                let wasBaked = haltBakedState[i] ?? false
+                let isBakedNow = group.isBlurBaked
+                haltBakedState[i] = isBakedNow
+                if armed && ((Self.haltSwitch == "unbake" && wasBaked && !isBakedNow)
+                    || (Self.haltSwitch == "bake" && !wasBaked && isBakedNow)) {
+                    let msg = "[MelismaKit/halt] \(Self.haltSwitch) row=\(i) blur=\(String(format: "%.2f", blur)) y=\(String(format: "%.0f", y))\n"
+                    try? msg.write(toFile: "/tmp/melismakit_halt.log", atomically: true, encoding: .utf8)
+                    print(msg)
+                    stopDisplayLink()
+                }
+            }
             frames.append(.init(index:i,y:y,height:heights[i],scale:ms,backgroundScale:bs,backgroundSlide:0,opacity:group.opacity.value(now),blur:blur,active:group.active,maskPosition:group.main.renderedCursor))
             if target+heights[i]>=0 && !seekCascade { stagger += baseDelay; if i>=focus { baseDelay /= 1.05 } }
         }
@@ -796,8 +970,37 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             leadingXs: leadingXs,
             introMarkerY: introMarkerY
         )
-        bottom.string = configuration.bottomText; bottom.fontSize = max(10,configuration.fontSize*0.5); bottom.contentsScale = scale
-        bottom.frame = CGRect(x:20,y:origin+(offsets.last ?? 0)+configuration.fontSize,width:max(0,bounds.width-40),height:configuration.fontSize*2)
+        let bottomText = configuration.bottomText
+        if lastBottomText != bottomText {
+            bottom.string = bottomText
+            lastBottomText = bottomText
+        }
+        let bottomFontSize = CGFloat(max(10, configuration.fontSize * 0.5))
+        if lastBottomFontSize != bottomFontSize {
+            bottom.fontSize = bottomFontSize
+            lastBottomFontSize = bottomFontSize
+        }
+        if lastBottomContentsScale != scale {
+            bottom.contentsScale = scale
+            lastBottomContentsScale = scale
+        }
+        // An empty bottom caption is not rendered. Do not move its text layer
+        // along with every lyric frame; re-enable frame tracking when a
+        // caption is configured later.
+        if bottomText.isEmpty {
+            lastBottomFrame = nil
+        } else {
+            let bottomFrame = CGRect(
+                x: 20,
+                y: origin + (offsets.last ?? 0) + configuration.fontSize,
+                width: max(0, bounds.width - 40),
+                height: configuration.fontSize * 2
+            )
+            if lastBottomFrame != bottomFrame {
+                bottom.frame = bottomFrame
+                lastBottomFrame = bottomFrame
+            }
+        }
         CATransaction.commit()
         let result = LyricsFrame(timeline:snapshot,groups:frames,interlude:interludeFrame,following:!interaction.suspended,glyphCacheBytes:cache.bytes,glyphCacheMisses:cache.misses,layoutCount:layoutEngine.layoutCount,renderMilliseconds:(CACurrentMediaTime()-started)*1000)
         lastFrame = result; onFrame?(result); return result
@@ -932,6 +1135,8 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     }
 
     private func setDotsHidden(_ hidden: Bool) {
+        guard dotsHidden != hidden else { return }
+        dotsHidden = hidden
         dots.isHidden = hidden
         dotLayers.forEach { $0.isHidden = hidden }
     }
@@ -1037,8 +1242,6 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 height: size
             )
             dotLayers[i].cornerRadius = size/2
-            dotLayers[i].isHidden = false
-            dotLayers[i].opacity = 1
             // AMLL's walk starts at 0.25. Normalize that baseline to the
             // configured inactive color, then blend toward the exact active
             // main-lyric color as each dot walks in.

@@ -303,6 +303,13 @@ public struct LyricsConfiguration: Equatable, Sendable {
     public var glow = true
     public var glowRadiusScale: Double = 1
     public var blur = true
+    /// Bake the blur of a settled, inactive row into that row's bitmap instead
+    /// of leaving a live Core Image filter on its layer. A layer filter is
+    /// re-evaluated by the render server on every composite, so a static
+    /// blurred row keeps costing a Gaussian pass per display refresh even when
+    /// the host is idle; rasterization cannot cache it because filters run
+    /// after the rasterization cache. Disable only for A/B measurement.
+    public var bakeSettledBlur = true
     public var scale = true
     public var spring = true
     public var hidePassedLines = false
