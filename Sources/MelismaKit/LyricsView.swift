@@ -613,9 +613,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if immediateSeek { cascadeUntil = 0 }
         let firstVisible = groups.firstIndex { $0.y.value(now)+$0.layout.expandedHeight >= 0 } ?? 0
         var stagger = 0.0, baseDelay = reflowed ? 0 : 0.05
-        // Rows whose bitmap can be produced this frame. Kept small because a bake
-        // rasterizes the row on the CPU, and the blur ramp uses a few of them.
-        var bakeBudget = 3
+        // Keep CPU rasterization to one settled row per display tick. A bake is
+        // synchronous, so a line transition must never queue several of them.
+        var bakeBudget = 1
         var frames: [LyricsGroupFrame] = []
         var leadingXs: [Double] = []
         for (i,group) in groups.enumerated() {
@@ -803,12 +803,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             // there is no pair of rendering paths that has to agree frame by
             // frame. The blur radius is followed by re-baking instead of by
             // handing the row back to a filter, which is what made the blur
-            // flicker several times after a line change — each hand-off was a
-            // switch between two slightly different renderings of the same
-            // nominal radius.
-            // Deliberately not routed through `canRasterize`: that check includes
-            // the blur tween, and a row whose radius is ramping has to stay baked
-            // and be re-blurred, not fall back to a live filter.
+            // A row must stay on the live filter while its blur radius ramps.
+            // Baking intermediate radii performs synchronous CPU rasterization
+            // during the line hand-off and can block several display ticks.
             let canBake = group.isVisible
                 && !active
                 && !presentationActive
@@ -818,6 +815,8 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 && !entryMotionActive
                 && !group.isReflowing
                 && group.bakedContentIsStatic(now)
+                && group.blur.settled(now)
+                && !clock.isPlaying
                 && blur > 0.01
                 && configuration.bakeSettledBlur
                 // A hovered row would bake the hover tint into the bitmap and
@@ -883,10 +882,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             } else { group.main.discardContent(); group.background?.discardContent() }
             // The decision was already taken above, before the content refresh;
             // here the bitmap is produced from the content that was just updated.
-            // A re-bake is needed while the blur radius ramps, so the tolerance is
-            // coarse enough to need only a few re-bakes across a 0.45s transition
-            // (a step of ~0.12 radius is not perceptible), and the budget keeps the
-            // CPU rasterization off the busiest frames.
+            // Never bake intermediate blur radii. The transition stays on the
+            // live filter, and the settled-row guard plus one-row budget make
+            // baking lazy without stacking synchronous rasterization work.
             if canBake, bakeBudget > 0,
                group.bakeBlur(radius: blur, scale: backingScale, renderScale: renderScale, context: imageContext, colorSpace: displayColorSpace, tolerance: 0.12) {
                 bakeBudget -= 1
