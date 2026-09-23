@@ -173,6 +173,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     // baked (live path takes over); `KMGCCC_LYRICS_HALT=bake` halts when a row
     // becomes baked. Remove together with this comment once the parity work is
     // done.
+    private static let parityDebugEnabled = ProcessInfo.processInfo.environment["KMGCCC_PARITY_DEBUG"] == "1"
     private static let haltSwitch = ProcessInfo.processInfo.environment["KMGCCC_LYRICS_HALT"] ?? ""
     private static let haltAfterSec = Double(ProcessInfo.processInfo.environment["KMGCCC_LYRICS_HALT_AFTER"] ?? "") ?? 0
     private var haltBakedState: [Int: Bool] = [:]
@@ -823,7 +824,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 // outlive the pointer, so leave it on the live path.
                 && !group.isHovered
             if !canBake { group.unbakeBlur() }
-            if ProcessInfo.processInfo.environment["KMGCCC_PARITY_DEBUG"] == "1" {
+            if Self.parityDebugEnabled {
                 print("[parity] i=\(i) canBake=\(canBake) baked=\(group.isBlurBaked) static=\(group.bakedContentIsStatic(now)) visible=\(group.isVisible) active=\(group.active) presActive=\(presentationActive) hh=\(highlightHold) ph=\(parallelHighlight) seek=\(seek) entry=\(entryMotionActive) entryUntil=\(String(format: "%.2f", entryAnimationHandoffUntil)) now=\(String(format: "%.2f", now)) reflow=\(group.isReflowing) hover=\(group.isHovered)")
             }
             // Only skip the content refresh while the baked bitmap is what is on
