@@ -353,6 +353,7 @@ final class LineLayers {
     let fade: Double
     private var highlight = Tween(0)
     private var wasActive = false
+    private var highlightWasHeld = false
     private var brightAlpha = 1.0, darkAlpha = 0.4
     private var previousTime: Double?
     private var cursor = HighlightSmoother()
@@ -370,6 +371,7 @@ final class LineLayers {
         if let previous {
             brightAlpha = previous.brightAlpha; darkAlpha = previous.darkAlpha
             highlight = previous.highlight; wasActive = previous.wasActive
+            highlightWasHeld = previous.highlightWasHeld
             previousTime = previous.previousTime; cursor = previous.cursor
             emphasisExitMedia = previous.emphasisExitMedia
             emphasisExitHost = previous.emphasisExitHost
@@ -419,7 +421,7 @@ final class LineLayers {
         for word in words { root.addSublayer(word.root) }
         for subline in sublines { root.addSublayer(subline.root) }
     }
-    func update(now: Double, media: Double, floatTime: Double, active: Bool, alpha: Double, background: Bool, config: LyricsConfiguration, playing: Bool = true, seek: Bool = false, highlightHold: Bool = false, preserveHighlight: Bool = false) {
+    func update(now: Double, media: Double, floatTime: Double, active: Bool, alpha: Double, background: Bool, config: LyricsConfiguration, playing: Bool = true, seek: Bool = false, highlightHold: Bool = false, highlightCatchUpProgress: Double? = nil, highlightFadeDuration: Double? = nil, preserveHighlight: Bool = false) {
         // `preserveHighlight` is the completed member of a parallel
         // foreground span.  It remains fully bright until the whole span is
         // gone; it is deliberately separate from `active` so a normal line
@@ -438,13 +440,30 @@ final class LineLayers {
             } else {
                 emphasisExitMedia = media; emphasisExitHost = now
             }
-            highlight.set(keepHighlight ? 1 : 0,at:now,duration:keepHighlight ? 0.2 : config.motion.exitFade)
+            let fadeDuration = max(config.motion.exitFade,highlightFadeDuration ?? config.motion.exitFade)
+            highlight.set(keepHighlight ? 1 : 0,at:now,duration:keepHighlight ? 0.2 : fadeDuration)
             if keepHighlight && config.lineTimingOnly { highlight.start += 0.05 }
             wasActive = keepHighlight
         }
+        // Keep enough active ink to make the moving catch-up mask readable on
+        // artwork. The final exit fade still starts from this floor once the
+        // mask reaches the line end.
+        let exitCatchUpFloor = 0.55
+        if !highlightHold && highlightWasHeld && !keepHighlight {
+            highlight.snap(exitCatchUpFloor)
+            highlight.set(0,at:now,duration:config.motion.exitFade)
+        }
         let lifetime = highlight.value(now)
         let visualActive = keepHighlight || highlightHold
-        let highlightLifetime = preserveHighlight ? 1 : lifetime
+        let catchUpLifetime = highlightCatchUpProgress.map {
+            let progress = pow(Curves.clamp($0),1.65)
+            return 1-(1-exitCatchUpFloor)*progress
+        }
+        let highlightLifetime = preserveHighlight
+            ? 1
+            : catchUpLifetime.map { max(exitCatchUpFloor,$0) }
+                ?? (highlightHold && !keepHighlight ? max(exitCatchUpFloor,lifetime) : lifetime)
+        highlightWasHeld = highlightHold
         // Only the active row and its short exit transition need a moving
         // karaoke mask. Future/settled rows can leave their gradient endpoints
         // untouched until they re-enter this state.
@@ -535,11 +554,11 @@ final class LineLayers {
                 : maskCursor
             let lineTimed = !layout.isDynamic && !config.lineTimingOnly && !discrete
             word.update(now:now,media:media,cursor:wordCursor,fade:fade,dark:wordDark,bright:wordBright,config:config,floatTime:config.lineTimingOnly ? -1e9 : floatTime,lineFallStartMedia:lineFallStartMedia,lineFallMultiplier:lineFallMultiplier,background:background,lifetime:wordLifetime,floatLifetime:floatLifetime,emphasisExitMedia:emphasisExitMedia,emphasisExitElapsed:exitElapsed,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:glowVisible,lineTimed:lineTimed,discreteOpacity:discreteOpacity,animateGradient:animateGradient)
-            for glyph in word.glyphs { glyph.updateBlend(active:keepHighlight,config:config) }
+            for glyph in word.glyphs { glyph.updateBlend(active:keepHighlight || highlightHold,config:config) }
         }
         for subline in sublines {
             subline.update(now:now,media:media,logicalX:0,cursor:1e9,fade:1,darkAlpha:0.3,brightAlpha:0.3,emphasis:nil,fontSize:layout.fontSize,config:config,float:0,background:background,subline:true,lifetime:highlightLifetime,baseVisible:baseVisible,highlightVisible:highlightVisible,glowVisible:false,lineTimed:!layout.isDynamic && !config.lineTimingOnly && !discrete,animateGradient:false)
-            subline.updateBlend(active:keepHighlight,config:config)
+            subline.updateBlend(active:keepHighlight || highlightHold,config:config)
         }
     }
     func settled(_ time: Double) -> Bool { highlight.settled(time) && words.allSatisfy { $0.settled(time) } }

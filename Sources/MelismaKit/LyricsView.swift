@@ -680,18 +680,46 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             let y = group.y.value(now)
             let distance = abs(Double(i-focus))
             let clear = hoverInside || now < clearUntil || seekPreview
+            let parallelHighlight = snapshot.highlighted.contains(i) && !group.active && configuration.preserveCompletedHighlight
+            var animationTime = media, floatTime = media, highlightHold = false
+            var highlightCatchUpProgress: Double?, highlightFadeDuration: Double?
+            if !group.active, let exit = group.exitTime {
+                let wordEnd = max(group.main.mask.points.last?.time ?? 0,group.background?.mask.points.last?.time ?? 0)
+                let remaining = max(0,wordEnd-group.exitMedia)
+                let duration = max(configuration.motion.catchUpMinimum,min(configuration.motion.catchUpMaximum,remaining))
+                let catchUpDuration = max(0.001,min(duration,remaining))
+                highlightFadeDuration = max(configuration.motion.exitFade,duration*1.5)
+                if !parallelHighlight,
+                   configuration.profile == .currentPlayer,
+                   clock.isPlaying,
+                   !seek,
+                   remaining > 0.016 {
+                    animationTime = exitCatchUpTime(start:group.exitMedia,end:wordEnd,elapsed:now-exit,duration:duration)
+                    floatTime = group.exitMedia-(now-exit)
+                    // The hold boundary follows the actual warped media time,
+                    // not a separate host-time deadline. This keeps blur and
+                    // highlight alive until the visible mask reaches the line
+                    // end, even when the display link or media clock skips.
+                    let catchUpComplete = animationTime >= wordEnd-0.001
+                    highlightHold = !catchUpComplete
+                    if highlightHold {
+                        highlightCatchUpProgress = min(1,max(0,(now-exit)/catchUpDuration))
+                    }
+                } else {
+                    highlightHold = parallelHighlight
+                }
+            }
             // AMLL keeps every row in the current foreground span crisp.  The
             // highlighted set includes rows retained across a parallel voice,
             // so a completed middle row does not suddenly blur while its
             // neighbouring duet/main rows continue singing.
             let isFocus = snapshot.playing.contains(i) || snapshot.highlighted.contains(i)
-            let blurTarget = configuration.blur && !clear && !isFocus
+            let blurTarget = configuration.blur && !clear && !isFocus && !highlightHold
                 ? min(configuration.motion.maximumBlurRadius,configuration.motion.blurRadius+distance*0.45)
                 : 0
-            if seekPreview {
-                // A scrub preview is a temporary inspection state. Do not
-                // spend the first few frames fading old blur away; every row
-                // must be readable while the pointer is moving.
+            if seekPreview || highlightHold {
+                // Scrub previews and exit catch-up must remain readable without
+                // spending frames fading old blur away.
                 group.blur.snap(0)
             } else {
                 group.blur.set(blurTarget,at:now,duration:configuration.motion.blurTransition)
@@ -750,18 +778,6 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             )
             let alphaTarget = Curves.clamp((ms-0.97)/0.03)
             group.alpha = alphaTarget
-            let parallelHighlight = snapshot.highlighted.contains(i) && !group.active && configuration.preserveCompletedHighlight
-            var animationTime = media, floatTime = media, highlightHold = false
-            if !group.active, let exit = group.exitTime {
-                let wordEnd = max(group.main.mask.points.last?.time ?? 0,group.background?.mask.points.last?.time ?? 0)
-                let remaining = max(0,wordEnd-group.exitMedia)
-                let duration = max(configuration.motion.catchUpMinimum,min(configuration.motion.catchUpMaximum,remaining))
-                highlightHold = parallelHighlight || (remaining > 0.016 && now-exit < duration)
-                if !parallelHighlight {
-                    animationTime = configuration.profile == .currentPlayer && clock.isPlaying && !seek ? exitCatchUpTime(start:group.exitMedia,end:wordEnd,elapsed:now-exit,duration:duration) : group.exitMedia
-                    floatTime = group.exitMedia-(now-exit)
-                }
-            }
             group.lastMedia = media
             // Warm the focused line while a load entrance is still below the
             // viewport. Without this one-line prewarm the first paused frame
@@ -846,7 +862,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 if !canReuseRasterizedContent {
                     group.main.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
                     group.background?.ensureContent(cache:cache,scale:scale,config:configuration,now:now)
-                    group.main.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:false,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                        group.main.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:false,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,highlightCatchUpProgress:highlightCatchUpProgress,highlightFadeDuration:highlightFadeDuration,preserveHighlight:parallelHighlight)
                 }
                 if let background = group.background {
                     // For a background-first group, AMLL's negative margin
@@ -877,7 +893,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                     )
                     background.setOpacity(configuration.usesOpaqueCompositing ? 1 : 0.4)
                     if !canReuseRasterizedContent {
-                        background.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:true,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,preserveHighlight:parallelHighlight)
+                        background.update(now:now,media:animationTime,floatTime:floatTime,active:group.active,alpha:group.alpha,background:true,config:configuration,playing:clock.isPlaying,seek:seek,highlightHold:highlightHold,highlightCatchUpProgress:highlightCatchUpProgress,highlightFadeDuration:highlightFadeDuration,preserveHighlight:parallelHighlight)
                     }
                 }
             } else { group.main.discardContent(); group.background?.discardContent() }

@@ -560,6 +560,51 @@ final class BehaviorRegressionTests: XCTestCase {
         XCTAssertGreaterThan(complete.groups[0].maskPosition,half.groups[0].maskPosition)
     }
 
+    func testExitCatchUpFadesHighlightDuringCatchUp() throws {
+        let word = LyricWord(id:"w",text:"Catch up",range:.init(0,4))
+        let line = LyricLine(id:"l",range:.init(0,4),words:[word],isWordTimed:true)
+        let config = LyricsConfiguration()
+        let layout = TextLayoutEngine().group(
+            PreparedGroup(source:.init(main:line),main:line,background:nil),
+            width:760,
+            config:config,
+            dynamic:true,
+            hasDuet:false
+        ).main
+        let layers = LineLayers(layout,cache:GlyphCache(),scale:2,config:config,previous:nil,now:0)
+        layers.update(now:0,media:1,floatTime:1,active:true,alpha:1,background:false,config:config,seek:true)
+        let glyph = try XCTUnwrap(layers.words.first?.glyphs.first)
+        let fadeDuration = 0.42
+
+        layers.update(now:1,media:1,floatTime:1,active:false,alpha:1,background:false,config:config,highlightHold:true,highlightCatchUpProgress:0,highlightFadeDuration:fadeDuration)
+        let initial = glyph.highlightOpacity
+        layers.update(now:1.14,media:2,floatTime:1.14,active:false,alpha:1,background:false,config:config,highlightHold:true,highlightCatchUpProgress:0.33,highlightFadeDuration:fadeDuration)
+        let duringCatchUp = glyph.highlightOpacity
+        XCTAssertLessThan(duringCatchUp,initial)
+        XCTAssertGreaterThanOrEqual(duringCatchUp,0.55)
+        layers.update(now:1.27,media:2.1,floatTime:1.27,active:false,alpha:1,background:false,config:config,highlightHold:true,highlightCatchUpProgress:0.64,highlightFadeDuration:fadeDuration)
+        XCTAssertGreaterThanOrEqual(glyph.highlightOpacity,0.55)
+
+        layers.update(now:1.28,media:2.1,floatTime:1.28,active:false,alpha:1,background:false,config:config)
+        XCTAssertLessThan(glyph.highlightOpacity,duringCatchUp)
+        layers.update(now:1.6,media:4,floatTime:1.6,active:false,alpha:1,background:false,config:config)
+        XCTAssertEqual(glyph.highlightOpacity,0,accuracy:0.001)
+    }
+
+    @MainActor func testExitCatchUpStaysSharpBeforeBlurReturns() throws {
+        let view = LyricsView(frame:NSRect(x:0,y:0,width:760,height:720)); view.automaticDisplayUpdates = false
+        try view.load(ttml:fixture,playing:true,hostTime:0)
+        view.render(at:2.3)
+        let exit = view.render(at:2.41)
+        let catchUp = view.render(at:2.55)
+        view.render(at:2.71)
+        let afterCatchUp = view.render(at:3.1)
+
+        XCTAssertEqual(exit.groups[0].blur,0,accuracy:0.001)
+        XCTAssertEqual(catchUp.groups[0].blur,0,accuracy:0.001)
+        XCTAssertGreaterThan(afterCatchUp.groups[0].blur,0.001)
+    }
+
     @MainActor func testBackgroundRevealIsContinuousAndDoesNotOvershoot() throws {
         let data = Data("<tt xmlns='http://www.w3.org/ns/ttml' xmlns:ttm='http://www.w3.org/ns/ttml#metadata'><body><div><p begin='1s' end='4s'><span begin='1s' end='4s'>Main</span><span ttm:role='x-bg' begin='1s' end='4s'>Background</span></p></div></body></tt>".utf8)
         let view = LyricsView(frame:NSRect(x:0,y:0,width:760,height:720)); view.automaticDisplayUpdates = false
