@@ -1220,18 +1220,19 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         let leadingX = leadingXs.indices.contains(nextIndex)
             ? leadingXs[nextIndex]
             : (bounds.width <= 500 ? 20.0 : configuration.fontSize)
-        // The transform is centered. Keep the physical left tangent pinned to
-        // the lyric leading edge while the marker breathes. This is equivalent
-        // to aligning the largest state (the important boundary) and avoids
-        // Core Animation rounding/anchor differences making the expanded dots
-        // spill past the lyric edge.
+        let nextLineIsDuet = prepared.indices.contains(nextIndex)
+            && prepared[nextIndex].main.isDuet
         let dotWidth = size + step*2
         let dotHeight = interludeMarkerHeight
-        // Pin the fully expanded marker to the lyric leading edge. At smaller
-        // breathing states it remains slightly inset instead of protruding
-        // past the text column.
+        // Align the marker with the next singing line: left-edge for a main
+        // line and right-edge for a duet line. Keep that edge pinned while the
+        // centered layer breathes so the marker does not drift across the row.
         let peakScale = 0.7*1.05
-        let dotX = leadingX + dotWidth*(peakScale-1)/2
+        let pad = bounds.width <= 500 ? 20.0 : configuration.fontSize
+        let alignmentEdgeX = nextLineIsDuet ? bounds.width-pad : leadingX
+        let dotX = nextLineIsDuet
+            ? alignmentEdgeX-dotWidth*(1+peakScale)/2
+            : alignmentEdgeX+dotWidth*(peakScale-1)/2
 
         let nextTop = frames[nextIndex].y
         let previousBottom: Double
