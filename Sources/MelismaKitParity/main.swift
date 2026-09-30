@@ -73,7 +73,7 @@ func compare(_ a: CGImage, _ b: CGImage, bandHeight: Int) -> DiffResult {
     let rowBytes = w * 4
     var result = DiffResult()
     result.total = w * h
-    var bandCount = (h + bandHeight - 1) / bandHeight
+    let bandCount = (h + bandHeight - 1) / bandHeight
     result.bandEdge95 = Array(repeating: 0, count: bandCount)
     var bandSamples = Array(repeating: 0, count: bandCount)
     for y in 0..<h {

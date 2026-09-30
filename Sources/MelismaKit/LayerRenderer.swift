@@ -765,7 +765,6 @@ final class GroupLayers {
         root.contents = nil
         root.filters = nil
         appliedBlur = 0
-        let pointWidth = bounds.width + pad * 2
         let pointHeight = bounds.height + pad * 2
         snapshotCtx.scaleBy(x: CGFloat(snapshotScale), y: CGFloat(snapshotScale))
         // Bitmap rows run top-down while the layer draws bottom-up.
