@@ -77,6 +77,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     public var configuration = LyricsConfiguration() {
         didSet {
             guard configuration != oldValue else { return }
+            cache.budget = configuration.cacheBudgetBytes
             groups.forEach { $0.disableRasterization() }
             if configuration.timing != oldValue.timing || configuration.profile != oldValue.profile || configuration.preserveCompletedHighlight != oldValue.preserveCompletedHighlight { rebuildTimeline() }
             let c = configuration, o = oldValue
@@ -113,13 +114,19 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     var areInterludeDotLayersVisible: Bool {
         !dots.isHidden && dotLayers.count == 3 && dotLayers.allSatisfy { !$0.isHidden }
     }
+    var glyphContentGroupIndices: [Int] {
+        groups.filter { !$0.main.words.isEmpty }.map(\.index)
+    }
 
     private var prepared: [PreparedGroup] = []
     private var timeline = LyricsTimeline(bounds:[],profile:.currentPlayer)
     private var clock = LyricsClock()
     private var interaction = LyricsInteraction()
     private let layoutEngine = TextLayoutEngine(), cache = GlyphCache()
-    private let imageContext = CIContext(options:[.cacheIntermediates:false])
+    // A context keeps its compiled GPU programs, and the driver keeps them for the
+    // process; surfaces are rebuilt often, so all views share one context.
+    private static let sharedImageContext = CIContext(options:[.cacheIntermediates:false])
+    private let imageContext = LyricsView.sharedImageContext
     private var groups: [GroupLayers] = []
     private let content = CALayer(), dots = CALayer(), bottom = CATextLayer()
     private var dotLayers: [CALayer] = []
@@ -224,6 +231,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     public override init(frame frameRect: NSRect) { super.init(frame:frameRect); setUp() }
     public required init?(coder: NSCoder) { super.init(coder:coder); setUp() }
     private func setUp() {
+        cache.budget = configuration.cacheBudgetBytes
         wantsLayer = true
         layerUsesCoreImageFilters = true
         layer?.masksToBounds = true; layer?.addSublayer(content)
@@ -237,7 +245,14 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         displayTarget.view = self
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Lyrics")
     }
-    deinit { displayLink?.invalidate(); observations.forEach(NotificationCenter.default.removeObserver) }
+    deinit {
+        displayLink?.invalidate()
+        observations.forEach(NotificationCenter.default.removeObserver)
+        groups.forEach { $0.teardown() }
+        groups.removeAll()
+        cache.removeAll()
+        layoutEngine.clear()
+    }
 
     /// Parsing succeeds before the previous document/surface is changed.
     public func load(ttml data: Data, time: Double = 0, playing: Bool = false, hostTime: Double = CACurrentMediaTime()) throws {
@@ -251,11 +266,13 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     /// The state transition is intentionally identical to `load(ttml:)` after
     /// parsing succeeds.
     public func install(document: LyricsDocument, time: Double = 0, playing: Bool = false, hostTime: Double = CACurrentMediaTime()) {
+        cache.budget = configuration.cacheBudgetBytes
+        cache.removeAll()
         // Phase 2：新文档装载前清空文本级布局缓存（key 随歌词内容变化），
         // 字体级缓存跨歌保留复用。
         layoutEngine.beginInstall()
         self.document = document
-        groups.forEach { $0.root.removeFromSuperlayer() }; groups.removeAll()
+        groups.forEach { $0.teardown() }; groups.removeAll()
         rebuildTimeline(); interaction.resume(); gapIdentity = nil; gapLastMedia = -Double.infinity; lastFocus = -1
         pendingEntryAnimation = .load
         runningEntryAnimation = nil
@@ -275,7 +292,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         document = nil
         prepared.removeAll()
         timeline = LyricsTimeline(bounds:[],profile:configuration.profile,preserveParallelHighlight:configuration.preserveCompletedHighlight)
-        groups.forEach { $0.root.removeFromSuperlayer() }; groups.removeAll()
+        groups.forEach { $0.teardown() }; groups.removeAll()
+        cache.removeAll()
+        layoutEngine.clear()
         setDotsHidden(true)
         bottom.string = nil
         clock.synchronize(time:time,playing:playing,host:hostTime,force:true)
@@ -340,11 +359,22 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     }
     public func releaseRenderingResources() {
         displayLink?.invalidate(); displayLink = nil
-        groups.forEach { $0.root.removeFromSuperlayer() }; groups.removeAll(); cache.removeAll(); layoutDirty = true
+        groups.forEach { $0.teardown() }; groups.removeAll(); cache.removeAll(); layoutDirty = true
         pendingEntryAnimation = nil
         runningEntryAnimation = nil
         entryAnimationHandoffUntil = 0
         pendingReflowIndices.removeAll(); pendingReflowCursor = 0; reflowInProgress = false
+        layoutEngine.clear()
+    }
+    /// Prune transient text metrics and reduce glyph cache to half budget during background/routine maintenance.
+    public func pruneTransientCaches() {
+        cache.prune(targetBytes: configuration.cacheBudgetBytes / 2)
+        layoutEngine.clear()
+        for group in groups where !group.isVisible {
+            group.unbakeBlur()
+            group.main.discardContent()
+            group.background?.discardContent()
+        }
     }
     private func rebuildTimeline() {
         guard let document else { return }
@@ -479,13 +509,13 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         var reflowed = false
         if needsReflow && !deferLiveResizeReflow {
             if groups.count != prepared.count {
-                // Initial document installation has no usable old geometry;
-                // create all group shells atomically so frame consumers still
-                // receive one complete group array on the first render.
-                reflowAll(now: now, scale: scale)
-                pendingReflowIndices.removeAll(keepingCapacity: true)
-                pendingReflowCursor = 0
-                reflowInProgress = false
+                // Keep stable indices and entrance tracks for the whole song,
+                // but shape only the focus neighbourhood on this first frame.
+                // Empty shells avoid shaping every preceding row when a new
+                // surface is installed in the middle of a song.
+                prepareGroupShells(now: now, scale: scale)
+                beginIncrementalReflow(focus: snapshot.focus)
+                _ = processIncrementalReflow(now: now, scale: scale, initial: true)
                 lastSize = bounds.size
                 lastScale = scale
                 layoutDirty = false
@@ -499,6 +529,15 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 _ = processIncrementalReflow(now: now, scale: scale)
             }
         } else if reflowInProgress {
+            if seek {
+                // A seek during installation must prepare the new viewport
+                // next, rather than waiting behind the old focus window.
+                pendingReflowIndices = pendingReflowIndices.dropFirst(pendingReflowCursor).sorted {
+                    let lhs = abs($0 - snapshot.focus), rhs = abs($1 - snapshot.focus)
+                    return lhs == rhs ? $0 < $1 : lhs < rhs
+                }
+                pendingReflowCursor = 0
+            }
             _ = processIncrementalReflow(now: now, scale: scale)
         }
         if lastContentFrame != bounds {
@@ -596,6 +635,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if configuration.alignAnchor == .center { origin -= anchorHeight/2 }
         if configuration.alignAnchor == .bottom { origin -= anchorHeight }
         origin -= interaction.offset + alignOffset
+        let startingEntry = pendingEntryAnimation != nil
         startPendingEntryAnimation(
             focus: focus,
             origin: origin,
@@ -603,6 +643,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             snapshot: snapshot,
             now: now
         )
+        if !startingEntry, runningEntryAnimation != nil, configuration.spring {
+            prewarmEntryContent(focus: focus, origin: origin, offsets: offsets, now: now, scale: scale)
+        }
         let position = seekPreview
             ? .nonBouncyPosition(from: configuration.positionSpring ?? currentPositionSpring)
             : (configuration.positionSpring ?? currentPositionSpring)
@@ -614,9 +657,9 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if immediateSeek { cascadeUntil = 0 }
         let firstVisible = groups.firstIndex { $0.y.value(now)+$0.layout.expandedHeight >= 0 } ?? 0
         var stagger = 0.0, baseDelay = reflowed ? 0 : 0.05
-        // Keep CPU rasterization to one settled row per display tick. A bake is
-        // synchronous, so a line transition must never queue several of them.
-        var bakeBudget = 1
+        // Snapshot capture stays on the main thread. Keep only one row per view
+        // in flight so repeated display ticks cannot build a blur backlog.
+        var bakeBudget = groups.contains(where: \.isBlurBakePending) ? 0 : 1
         var frames: [LyricsGroupFrame] = []
         var leadingXs: [Double] = []
         for (i,group) in groups.enumerated() {
@@ -688,8 +731,13 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 let remaining = max(0,wordEnd-group.exitMedia)
                 let duration = max(configuration.motion.catchUpMinimum,min(configuration.motion.catchUpMaximum,remaining))
                 let catchUpDuration = max(0.001,min(duration,remaining))
-                highlightFadeDuration = max(configuration.motion.exitFade,duration*1.5)
-                if !parallelHighlight,
+                // Discrete words light on their own clock. An early exit fades
+                // at the plain exit duration instead of holding the highlight
+                // until the mask reaches the line end.
+                let discreteHighlight = configuration.usesDiscreteHighlight
+                highlightFadeDuration = discreteHighlight ? nil : max(configuration.motion.exitFade,duration*1.5)
+                if !discreteHighlight,
+                   !parallelHighlight,
                    configuration.profile == .currentPlayer,
                    clock.isPlaying,
                    !seek,
@@ -803,7 +851,10 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
             // bake time and refreshing it one frame later showed a stale frame at
             // a shifted position, which is what made a hovered row flash and drift
             // before snapping back.
-            let canRasterize = group.isVisible
+            // Settled-blur mode rejects rasterization whenever this row has blur,
+            // so don't walk its glyph tree to compute a result that will be unused.
+            let canRasterize = !(configuration.bakeSettledBlur && blur > 0.01)
+                && group.isVisible
                 && !active
                 && !presentationActive
                 && !highlightHold
@@ -831,7 +882,6 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 && !seek
                 && !entryMotionActive
                 && !group.isReflowing
-                && group.bakedContentIsStatic(now)
                 && group.blur.settled(now)
                 && !clock.isPlaying
                 && blur > 0.01
@@ -839,6 +889,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
                 // A hovered row would bake the hover tint into the bitmap and
                 // outlive the pointer, so leave it on the live path.
                 && !group.isHovered
+                && group.bakedContentIsStatic(now)
             if !canBake { group.unbakeBlur() }
             if Self.parityDebugEnabled {
                 print("[parity] i=\(i) canBake=\(canBake) baked=\(group.isBlurBaked) static=\(group.bakedContentIsStatic(now)) visible=\(group.isVisible) active=\(group.active) presActive=\(presentationActive) hh=\(highlightHold) ph=\(parallelHighlight) seek=\(seek) entry=\(entryMotionActive) entryUntil=\(String(format: "%.2f", entryAnimationHandoffUntil)) now=\(String(format: "%.2f", now)) reflow=\(group.isReflowing) hover=\(group.isHovered)")
@@ -1082,11 +1133,46 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         }
     }
 
-    private func reflowAll(now: Double, scale: Double) {
-        cache.budget = configuration.cacheBudgetBytes
-        guard let document else { return }
-        for i in prepared.indices {
-            reflowGroup(at: i, now: now, scale: scale, document: document)
+    /// Build one upcoming row before its entry spring reaches the viewport.
+    /// Visible rows still build immediately; this spreads their first glyph
+    /// rasterization across the preceding display ticks without delaying text.
+    private func prewarmEntryContent(focus: Int, origin: Double, offsets: [Double], now: Double, scale: Double) {
+        let top = -configuration.overscan
+        let bottom = bounds.height + configuration.overscan
+        let candidate = groups.indices.lazy.filter { index in
+            let group = self.groups[index]
+            let needsMain = group.main.words.isEmpty && !group.layout.main.words.isEmpty
+            let needsBackground = group.background.map { $0.words.isEmpty && !$0.layout.words.isEmpty } ?? false
+            guard needsMain || needsBackground else { return false }
+            let target = origin + offsets[index]
+            guard target <= bottom, target + group.layout.expandedHeight >= top else { return false }
+            let current = group.y.value(now)
+            return current > bottom || current + group.layout.expandedHeight < top
+        }.min { abs($0 - focus) < abs($1 - focus) }
+        guard let index = candidate else { return }
+        groups[index].main.ensureContent(cache: cache, scale: scale, config: configuration, now: now)
+        groups[index].background?.ensureContent(cache: cache, scale: scale, config: configuration, now: now)
+    }
+
+    private func prepareGroupShells(now: Double, scale: Double) {
+        groups.forEach { $0.teardown() }
+        groups.removeAll(keepingCapacity: true)
+        let size = max(10, configuration.fontSize)
+        let emptyLine = LineTextLayout(
+            words: [], sublines: [], height: size * 1.2,
+            width: 0, fontSize: size, isDynamic: false
+        )
+        let shell = GroupTextLayout(
+            main: emptyLine, background: nil, padding: size * 0.4,
+            gap: size * 0.3, width: max(1, bounds.width)
+        )
+        for index in prepared.indices {
+            let group = GroupLayers(
+                index: index, layout: shell, initialY: bounds.height * 2,
+                cache: cache, scale: scale, config: configuration, now: now
+            )
+            groups.append(group)
+            content.insertSublayer(group.root, below: dots)
         }
     }
 
@@ -1100,14 +1186,14 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     }
 
     @discardableResult
-    private func processIncrementalReflow(now: Double, scale: Double) -> Bool {
+    private func processIncrementalReflow(now: Double, scale: Double, initial: Bool = false) -> Bool {
         guard reflowInProgress, let document else { return false }
         cache.budget = configuration.cacheBudgetBytes
         let started = CACurrentMediaTime()
         var processed = 0
         while pendingReflowCursor < pendingReflowIndices.count {
-            if processed >= reflowBatchLimit { break }
-            if processed > 0 && CACurrentMediaTime() - started >= reflowFrameBudget { break }
+            if processed >= (initial ? reflowBatchLimit * 2 : reflowBatchLimit) { break }
+            if processed > 0 && CACurrentMediaTime() - started >= reflowFrameBudget * (initial ? 2 : 1) { break }
             let index = pendingReflowIndices[pendingReflowCursor]
             pendingReflowCursor += 1
             reflowGroup(at: index, now: now, scale: scale, document: document)
