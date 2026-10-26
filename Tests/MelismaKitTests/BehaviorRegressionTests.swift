@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import XCTest
 @testable import MelismaKit
 
@@ -367,15 +368,79 @@ final class BehaviorRegressionTests: XCTestCase {
             layers.update(now: 0, media: 0, floatTime: 0, active: true, alpha: 1, background: false, config: config)
             layers.update(now: 0.5, media: 0.5, floatTime: 0.5, active: true, alpha: 1, background: false, config: config)
 
-            let opacities = try layers.words.map { word in
-                let glyph = try XCTUnwrap(word.glyphs.first)
-                return glyph.baseOpacity + glyph.highlightOpacity
-            }
+            let glyphs = try layers.words.map { try XCTUnwrap($0.glyphs.first) }
+            let opacities = glyphs.map { $0.baseOpacity + $0.highlightOpacity }
             XCTAssertGreaterThan(opacities[0], opacities[1] + 0.05)
             if fullscreen {
-                XCTAssertEqual(opacities[1], 0.28, accuracy: 0.0001)
+                // Opaque surfaces keep the unsung word solid in the inactive colour.
+                XCTAssertEqual(glyphs[1].baseOpacity, 1, accuracy: 0.0001)
+                XCTAssertEqual(glyphs[1].highlightOpacity, 0, accuracy: 0.0001)
             } else {
                 XCTAssertEqual(opacities[1], 0.28, accuracy: 0.0001)
+            }
+        }
+    }
+
+    func testDiscreteExitFadesFromTheLitAmountInsteadOfFlashingToFullyLit() throws {
+        let words = [
+            LyricWord(id: "first", text: "First", range: .init(0, 1)),
+            LyricWord(id: "second", text: "Second", range: .init(1, 2))
+        ]
+        let line = LyricLine(id: "line", range: .init(0, 2), words: words, isWordTimed: true)
+        var config = LyricsConfiguration()
+        config.highlightMode = .discrete
+        config.fullscreenLyricDodgeMode = true
+        let layout = TextLayoutEngine().group(
+            PreparedGroup(source: .init(main: line), main: line, background: nil),
+            width: 760,
+            config: config,
+            dynamic: true,
+            hasDuet: false
+        ).main
+        let layers = LineLayers(layout, cache: GlyphCache(), scale: 2, config: config, previous: nil, now: 0)
+
+        layers.update(now: 0, media: 0, floatTime: 0, active: true, alpha: 1, background: false, config: config)
+        layers.update(now: 0.5, media: 0.5, floatTime: 0.5, active: true, alpha: 1, background: false, config: config)
+        let sweeping = try XCTUnwrap(layers.words.first?.glyphs.first).highlightOpacity
+        XCTAssertLessThan(sweeping, 0.9)
+
+        // The first word is still mid-sweep when the row leaves. It keeps that
+        // amount and fades from there rather than jumping to fully lit.
+        layers.update(now: 0.5, media: 0.5, floatTime: 0.5, active: false, alpha: 1, background: false, config: config)
+        layers.update(now: 0.51, media: 0.51, floatTime: 0.51, active: false, alpha: 1, background: false, config: config)
+        let exiting = try XCTUnwrap(layers.words.first?.glyphs.first).highlightOpacity
+        XCTAssertEqual(exiting, sweeping, accuracy: 0.05)
+    }
+
+    func testDiscreteHighlightCoversEveryGlyphOfAWrappedRow() throws {
+        let words = [
+            LyricWord(id: "first", text: "Alpha ", range: .init(0, 1)),
+            LyricWord(id: "second", text: "Beta ", range: .init(1, 2)),
+            LyricWord(id: "third", text: "Gamma ", range: .init(2, 3)),
+            LyricWord(id: "fourth", text: "Delta", range: .init(3, 4))
+        ]
+        let line = LyricLine(id: "line", range: .init(0, 4), words: words, isWordTimed: true)
+        var config = LyricsConfiguration()
+        config.highlightMode = .discrete
+        config.fullscreenLyricDodgeMode = true
+        let layout = TextLayoutEngine().group(
+            PreparedGroup(source: .init(main: line), main: line, background: nil),
+            width: 200,
+            config: config,
+            dynamic: true,
+            hasDuet: false
+        ).main
+        let layers = LineLayers(layout, cache: GlyphCache(), scale: 2, config: config, previous: nil, now: 0)
+
+        layers.update(now: 0, media: 0, floatTime: 0, active: true, alpha: 1, background: false, config: config)
+        layers.update(now: 0.5, media: 0.5, floatTime: 0.5, active: true, alpha: 1, background: false, config: config)
+
+        // Words on a second row must not inherit a row-local cursor compared
+        // against the line-wide logical x, which left them on the inactive side.
+        XCTAssertGreaterThan(Set(layers.words.map { $0.placement.rect.minY }).count, 1)
+        for word in layers.words {
+            for glyph in word.glyphs {
+                XCTAssertGreaterThan(glyph.gradient.startPoint.x, 0.99)
             }
         }
     }
@@ -777,4 +842,106 @@ final class BehaviorRegressionTests: XCTestCase {
         XCTAssertEqual((glyph.glow.compositingFilter as? CIFilter)?.name, "CIAdditionCompositing")
     }
 
+    func testGroupLayersTeardownAndUnbakeBlurReleasesResources() throws {
+        let word = LyricWord(id: "w", text: "Testing", range: .init(0, 3))
+        let line = LyricLine(id: "l", range: .init(0, 3), words: [word], isWordTimed: true)
+        let config = LyricsConfiguration()
+        let groupLayout = TextLayoutEngine().group(
+            PreparedGroup(source: .init(main: line), main: line, background: nil),
+            width: 760,
+            config: config,
+            dynamic: true,
+            hasDuet: false
+        )
+        let group = GroupLayers(
+            index: 0,
+            layout: groupLayout,
+            initialY: 0,
+            cache: GlyphCache(),
+            scale: 2,
+            config: config,
+            now: 0
+        )
+        XCTAssertFalse(group.root.sublayers?.isEmpty ?? true)
+        group.teardown()
+        XCTAssertNil(group.root.contents)
+        XCTAssertNil(group.root.filters)
+        XCTAssertNil(group.root.compositingFilter)
+        XCTAssertNil(group.blurFilter)
+        XCTAssertTrue(group.root.sublayers?.isEmpty ?? true)
+        XCTAssertFalse(group.isBlurBaked)
+    }
+
+    @MainActor
+    func testGroupLayersBakesBlurAsynchronouslyAndCanUnbakeIt() async throws {
+        let word = LyricWord(id: "w", text: "Testing", range: .init(0, 3))
+        let line = LyricLine(id: "l", range: .init(0, 3), words: [word], isWordTimed: true)
+        let config = LyricsConfiguration()
+        let groupLayout = TextLayoutEngine().group(
+            PreparedGroup(source: .init(main: line), main: line, background: nil),
+            width: 320,
+            config: config,
+            dynamic: true,
+            hasDuet: false
+        )
+        let group = GroupLayers(
+            index: 0,
+            layout: groupLayout,
+            initialY: 0,
+            cache: GlyphCache(),
+            scale: 2,
+            config: config,
+            now: 0
+        )
+        group.root.bounds = CGRect(x: 0, y: 0, width: 320, height: groupLayout.expandedHeight)
+        group.main.ensureContent(cache: GlyphCache(), scale: 2, config: config, now: 0)
+        let context = CIContext(options: [.cacheIntermediates: false])
+
+        XCTAssertTrue(group.bakeBlur(radius: 3, scale: 2, context: context))
+        XCTAssertTrue(group.isBlurBakePending)
+        XCTAssertFalse(group.isBlurBaked)
+        XCTAssertNil(group.root.contents)
+
+        // Cancellation invalidates the in-flight result; a replacement request
+        // must remain pending even if the old worker finishes first.
+        group.unbakeBlur()
+        XCTAssertFalse(group.isBlurBakePending)
+        XCTAssertFalse(group.isBlurBaked)
+        XCTAssertNil(group.root.contents)
+        group.root.backgroundColor = NSColor.red.cgColor
+        XCTAssertTrue(group.bakeBlur(radius: 3, scale: 2, context: context))
+        XCTAssertTrue(group.isBlurBakePending)
+
+        let deadline = Date().addingTimeInterval(5)
+        while group.isBlurBakePending && Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(group.isBlurBakePending, "The background bake did not finish in time")
+        XCTAssertTrue(group.isBlurBaked)
+        let contents = try XCTUnwrap(group.root.contents)
+        let cfContents = contents as CFTypeRef
+        XCTAssertEqual(CFGetTypeID(cfContents), CGImage.typeID)
+        let image = unsafeBitCast(cfContents, to: CGImage.self)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        let center = try XCTUnwrap(bitmap.colorAt(x: image.width / 2, y: image.height / 2)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(center.redComponent, 0.8)
+        XCTAssertLessThan(center.greenComponent, 0.2)
+
+        group.unbakeBlur()
+        XCTAssertFalse(group.isBlurBaked)
+        XCTAssertNil(group.root.contents)
+        group.teardown()
+    }
+
+    @MainActor
+    func testLyricsViewPruneTransientCachesAndLifecycleTeardown() throws {
+        let data = Data("<tt xmlns='http://www.w3.org/ns/ttml'><body><div><p begin='0s' end='3s'><span begin='0s' end='3s'>One</span></p><p begin='3s' end='6s'><span begin='3s' end='6s'>Two</span></p></div></body></tt>".utf8)
+        let view = LyricsView(frame: NSRect(x: 0, y: 0, width: 760, height: 720))
+        view.automaticDisplayUpdates = false
+        try view.load(ttml: data, playing: true, hostTime: 0)
+        _ = view.render(at: 1.0)
+        view.pruneTransientCaches()
+        view.releaseRenderingResources()
+        XCTAssertFalse(view.isDisplayUpdateRunning)
+    }
 }

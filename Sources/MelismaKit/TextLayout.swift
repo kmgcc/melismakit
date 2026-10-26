@@ -83,8 +83,14 @@ final class TextLayoutEngine {
     /// 新文档装载前调用：清空文本级缓存（key 随歌词内容变化，旧歌的文本不再命中），
     /// 保留字体级缓存（key 空间小，跨歌可复用）。
     func beginInstall() {
-        runCache.removeAll(keepingCapacity: true)
-        widthCache.removeAll(keepingCapacity: true)
+        runCache.removeAll(keepingCapacity: false)
+        widthCache.removeAll(keepingCapacity: false)
+    }
+
+    /// 清空文本级缓存并释放底层哈希桶空间
+    func clear() {
+        runCache.removeAll(keepingCapacity: false)
+        widthCache.removeAll(keepingCapacity: false)
     }
 
     private func measureKey(_ text: String, _ config: LyricsConfiguration, _ size: Double) -> MeasureKey {

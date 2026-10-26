@@ -324,7 +324,7 @@ public struct LyricsConfiguration: Equatable, Sendable {
     public var timing = LyricsTimingConfiguration()
     public var positionSpring: SpringParameters?
     public var bottomText = ""
-    public var cacheBudgetBytes = 64 * 1024 * 1024
+    public var cacheBudgetBytes = 6 * 1024 * 1024
     public var overscan: Double = 300
     /// Raster quality relative to the backing scale. Values below one are
     /// useful for an always-on fullscreen surface and match host render-scale
@@ -342,6 +342,11 @@ public struct LyricsConfiguration: Equatable, Sendable {
 
     var usesOpaqueCompositing: Bool {
         surface.opaque || fullscreenLyricDodgeMode || usesCoverBlurCompositing
+    }
+
+    /// Line-timing-only documents keep their row-level path and ignore discrete highlighting.
+    var usesDiscreteHighlight: Bool {
+        highlightMode == .discrete && !lineTimingOnly
     }
 
     var effectiveCoverBlurProfile: LyricsCoverBlurProfile {
