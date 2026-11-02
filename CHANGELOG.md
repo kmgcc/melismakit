@@ -6,7 +6,7 @@
 
 ### 新增
 
-- 位置弹簧优先使用 `springDuration` 与 `springBounce`，默认 `0.55` 与 `0.65`；`positionSpring` 保留为底层覆盖。
+- 位置弹簧优先使用 `springDuration` 与 `springBounce`，默认 `0.55` 与 `0.75`；`positionSpring` 保留为底层覆盖。
 
 ## [0.3.0] - 2026-11-02
 

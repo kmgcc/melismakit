@@ -252,7 +252,7 @@ lyrics.configuration = configuration
 - `alignPosition`：焦点行在视图高度中的相对位置，`0.35` 表示偏上；窗口面板通常可以在 `0.28–0.38` 之间调整。
 - `renderScale`：相对于 backing scale 的渲染比例，以 backing scale 为基准；全屏常驻 surface 可以用 `0.75`。
 - `fpsCap`：`0` 跟随显示器原生刷新率；需要省电时设 `60`。
-- `springDuration` / `springBounce`：位置弹簧的两个高层参数，默认 `0.55` / `0.65`；需要完全控制弹簧时设置 `positionSpring`。
+- `springDuration` / `springBounce`：位置弹簧的两个高层参数，默认 `0.55` / `0.75`；需要完全控制弹簧时设置 `positionSpring`。
 - `timing.trackOffset`：只影响展示时间；`timing.seekOffset`：只影响 `onSeek` 回传的时间。两者分别作用于展示与回传，各司其职。
 - `surface` 与 `coverBlur*`：封面模糊或多层合成场景使用这些字段；普通窗口保持 `.window` 与 `.full`。
 

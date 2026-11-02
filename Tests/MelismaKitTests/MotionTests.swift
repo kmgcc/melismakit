@@ -74,10 +74,10 @@ final class MotionTests: XCTestCase {
     func testLyricsSpringDefaultsMatchPlayerSettings() {
         let configuration = LyricsConfiguration()
         XCTAssertEqual(configuration.springDuration, 0.55, accuracy: 1e-12)
-        XCTAssertEqual(configuration.springBounce, 0.65, accuracy: 1e-12)
+        XCTAssertEqual(configuration.springBounce, 0.75, accuracy: 1e-12)
         XCTAssertEqual(
             configuration.effectivePositionSpring,
-            SpringParameters.position(duration: 0.55, bounce: 0.65)
+            SpringParameters.position(duration: 0.55, bounce: 0.75)
         )
     }
     func testLowLevelPositionSpringTakesPrecedence() {
@@ -88,8 +88,8 @@ final class MotionTests: XCTestCase {
     }
     func testPositionConvenienceMatchesPositionOverride() {
         XCTAssertEqual(
-            SpringParameters.position(duration: 0.55, bounce: 0.65),
-            SpringParameters.positionOverride(duration: 0.55, bounce: 0.65)
+            SpringParameters.position(duration: 0.55, bounce: 0.75),
+            SpringParameters.positionOverride(duration: 0.55, bounce: 0.75)
         )
     }
     func testNonBouncyPositionIsCriticallyDamped() {

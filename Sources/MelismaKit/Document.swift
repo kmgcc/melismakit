@@ -327,7 +327,7 @@ public struct LyricsConfiguration: Equatable, Sendable {
     public var springDuration: Double = 0.55
     /// Position spring bounce. The default matches the player's lyric spring
     /// setting.
-    public var springBounce: Double = 0.65
+    public var springBounce: Double = 0.75
     /// Low-level position spring override. When set, it takes precedence over
     /// `springDuration` and `springBounce`.
     public var positionSpring: SpringParameters?

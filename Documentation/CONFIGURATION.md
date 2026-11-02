@@ -76,12 +76,12 @@
 
 ### 位置弹簧
 
-位置弹簧优先使用 `springDuration` 与 `springBounce`，默认值为 `0.55` 与 `0.65`；这两个值与播放器的歌词弹簧设置采用同一套语义。需要完全控制质量、阻尼与刚度时，设置 `positionSpring`。
+位置弹簧优先使用 `springDuration` 与 `springBounce`，默认值为 `0.55` 与 `0.75`；这两个值与播放器的歌词弹簧设置采用同一套语义。需要完全控制质量、阻尼与刚度时，设置 `positionSpring`。
 
 | 属性 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `springDuration` | `Double` | `0.55` | 位置弹簧持续时间，秒 |
-| `springBounce` | `Double` | `0.65` | 位置弹簧反弹 |
+| `springBounce` | `Double` | `0.75` | 位置弹簧反弹 |
 | `positionSpring` | `SpringParameters?` | `nil` | 底层弹簧参数；设置后优先于前两者 |
 
 ### 封面模糊与全屏
