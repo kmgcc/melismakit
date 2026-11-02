@@ -2,7 +2,7 @@ import XCTest
 import MelismaKit
 import MelismaKitBenchCore
 
-/// Phase 0（P0-3）：可复现语料库的生成器驱动完整性测试。
+/// 可复现语料库的生成器驱动完整性测试。
 ///
 /// `Fixtures/` 下的语料文件由 `MelismaKitBenchCore.SyntheticTTML` 确定性生成
 /// （字节一致，SHA256 清单可复核）。本测试直接驱动生成器，校验每个语料文档

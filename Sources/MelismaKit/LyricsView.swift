@@ -268,7 +268,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     public func install(document: LyricsDocument, time: Double = 0, playing: Bool = false, hostTime: Double = CACurrentMediaTime()) {
         cache.budget = configuration.cacheBudgetBytes
         cache.removeAll()
-        // Phase 2：新文档装载前清空文本级布局缓存（key 随歌词内容变化），
+        // 新文档装载前清空文本级布局缓存（key 随歌词内容变化）；
         // 字体级缓存跨歌保留复用。
         layoutEngine.beginInstall()
         self.document = document

@@ -1,7 +1,7 @@
 import XCTest
 import MelismaKit
 
-/// Phase 0（P0-2）：解码器对抗性健壮性测试。
+/// 解码器对抗性健壮性测试。
 ///
 /// 每条用例明确断言「抛错」或「成功 + 预期结构」。当前行为即基线契约，
 /// 后续任何改动不得静默改变这些行为；要改变必须先改这里的断言并说明理由。
@@ -250,13 +250,13 @@ final class DecoderRobustnessTests: XCTestCase {
 
     // MARK: - DOCTYPE 四种形态
     //
-    // 基线事实（审计 HIGH 项）：`TTMLDecoder.swift` 的 `hasDoctype` 守卫依赖
+    // 现状契约：`TTMLDecoder.swift` 的 `hasDoctype` 守卫依赖
     // XMLParserDelegate.foundExternalEntityDeclarationWithName，但该回调在
     // `shouldResolveExternalEntities = false` 下不会被触发 —— 无论 DOCTYPE 是
     // 内部子集、SYSTEM、PUBLIC 还是带外部实体声明，解析都静默成功。
     // 由于外部实体不会被解析（resolveExternalEntityName 返回 nil），当前没有
-    // 实体注入面，但「拒绝 DOCTYPE」的意图未达成。这里锁定现状契约；
-    // 收紧守卫属于后续加固阶段（见 ROADMAP Phase 0 完成记录）。
+    // 实体注入面，但「拒绝 DOCTYPE」的意图未达成。这里锁定现状；
+    // 收紧守卫需要单独修改实现并同步更新这些断言。
 
     func testDoctypeInternalSubsetWithoutEntities() throws {
         let xml = """

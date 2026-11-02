@@ -55,9 +55,9 @@ final class TextLayoutEngine {
     // the entry reflow on the main thread.
     private let wordTokenizer = NLTokenizer(unit: .word)
 
-    // Phase 2（P2-1）：字体解析缓存。
+    // 字体解析缓存。
     // font() 每次调用都会走 NSFontManager.shared.availableMembers(ofFontFamily:)，
-    // 那是一次没有系统级缓存的全表扫描，是装载阻塞（install 0.27–1.64s）的主要来源。
+    // 那是一次没有系统级缓存的全表扫描，是首次装载布局的主要成本之一。
     // key 覆盖 family / size / cssWeight / italic / fontWeight，解析一次后复用。
     // 该缓存跨装载保留：key 空间很小（同一配置下只有几组 family×size×weight 组合），
     // 切歌时直接复用，字体解析只发生一次。
@@ -70,7 +70,7 @@ final class TextLayoutEngine {
     }
     private var fontCache: [FontKey: CTFont] = [:]
 
-    // Phase 2（P2-3）：度量缓存。
+    // 度量缓存。
     // 同一文本在同一字体参数下会被多次整形：atomWidths 预测量、baseRuns、
     // ruby/roman 宽度、chorus 重复行。按 key 缓存 fontRuns 的分段结果与总宽度。
     // key 覆盖 text / family / familyCJK / size / fontWeight（即 font() 的全部输入）。
@@ -332,8 +332,8 @@ final class TextLayoutEngine {
                 let mainY = hasRuby ? fontSize*0.5 : 0
                 var pieces: [GlyphPlacement] = []
                 if atom.emphasis != nil && config.emphasis {
-                    // 逐字符保持字形身份与时间；同一 run 内只解析一次字体
-                    // （P2-2：消除逐字符 font() 解析），宽度仍按字符逐个度量。
+                    // 逐字符保持字形身份与时间；同一 run 内只解析一次字体，
+                    // 宽度仍按字符逐个度量。
                     var cx = baseX
                     var charIndex = 0
                     for run in baseRuns {

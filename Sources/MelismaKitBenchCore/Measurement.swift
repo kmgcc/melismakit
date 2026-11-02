@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import MelismaKit
 
-/// Phase 0（基线与可复现性）的测量统计。
+/// Bench 与 Probe 共用的测量统计。
 ///
 /// 本模块与 `MelismaKitProbe` 保持**完全相同的口径**（nearest-rank 百分位、丢首帧、
 /// 120fps 渲染），确保 Bench 与 Probe 的数字可以直接互相印证。

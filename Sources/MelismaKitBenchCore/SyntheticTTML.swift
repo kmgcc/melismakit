@@ -1,26 +1,26 @@
 import Foundation
 
-/// Phase 0（基线与可复现性）的合成 TTML 生成器。
+/// 确定性合成 TTML 生成器。
 ///
-/// 本模块供 `MelismaKitBench`（P0-1）与 `MelismaKitProbe`（P0-4）共用，保证两个工具
-/// 的测量口径完全一致。所有生成内容都是**确定性**的：没有时间戳、没有随机数，
-/// 同一输入永远产出字节一致的结果 —— 这是 `Fixtures/SHA256SUMS.txt` 清单可复现的前提。
+/// 本模块供 `MelismaKitBench` 与 `MelismaKitProbe` 共用，保证两个工具的测量口径
+/// 完全一致。所有生成内容都是**确定性**的：没有时间戳、没有随机数，同一输入永远
+/// 产出字节一致的结果 —— 这是 `Fixtures/SHA256SUMS.txt` 清单可复现的前提。
 ///
 /// 歌词文本全部为原创占位内容，遵循 `Documentation/LICENSING.md` 的资产政策
 /// （不引入任何受著作权保护的第三方歌词）。
 public enum SyntheticTTML {
 
-    // MARK: - 规模测量文档（对应 ROADMAP §2.2 的对照行）
+    // MARK: - 规模测量文档
 
     /// 规模测量文档的类型。
     public enum ScaleMode: String, CaseIterable, Codable {
-        /// §2.2「合成」：普通歌曲，逐词定时
+        /// 普通歌曲，逐词定时
         case word = "word"
-        /// §2.2「line-timed」：逐行定时
+        /// 逐行定时
         case line = "line"
-        /// §2.2「ruby」：日语 + Ruby 注音
+        /// 日语 + Ruby 注音
         case ruby = "ruby"
-        /// §2.2「长词压力」：超长单词
+        /// 超长单词压力路径
         case longWord = "longWord"
     }
 
@@ -35,7 +35,7 @@ public enum SyntheticTTML {
         }
     }
 
-    // MARK: - 可复现语料库（P0-3，写入 Fixtures/）
+    // MARK: - 可复现语料库（写入 Fixtures/）
 
     /// 可复现语料库中的文档。
     public enum CorpusFile: String, CaseIterable, Sendable {

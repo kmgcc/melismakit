@@ -75,7 +75,7 @@ private func parseArgs() -> Options {
     return o
 }
 
-// MARK: - 语料库生成与校验（P0-3）
+// MARK: - 语料库生成与校验
 
 private func emitFixtures(_ dir: String) throws {
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -122,7 +122,7 @@ private func verifyFixtures(_ dir: String) -> Bool {
     return ok
 }
 
-// MARK: - 测量主流程（P0-1）
+// MARK: - 测量主流程
 
 @MainActor private func runBench(_ o: Options) throws {
     let ttml = Data(SyntheticTTML.scaled(lines: o.scale, mode: o.mode).utf8)

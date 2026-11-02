@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""MelismaKit Phase 0 性能阈值护栏（P0-7）。
+"""MelismaKit 性能阈值护栏。
 
 输入：`MelismaKitBench --scale 120 --json` 的单行 JSON。
 作用：以宽松阈值拦截大幅回退（例如把 `reflowBatchLimit` 改成 1 这类故意破坏）。
 
-阈值依据：Documentation/PERFORMANCE.md 的 2026-09-12 基线（Release 构建，120 行 word）。
-基线实测：install 751ms、p50 0.86ms、p99 5.34ms、max 9.39ms、>8.33ms 1 帧、>16.67ms 0 帧。
+阈值依据：Documentation/PERFORMANCE.md 的参考测量（Release 构建，120 行 word）。
 阈值取 5–10 倍以上的松弛余量，只拦「量级劣化」，不拦正常波动。
 """
 
