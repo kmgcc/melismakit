@@ -2,7 +2,7 @@
 
 > macOS 上的原生逐字歌词渲染组件。
 
-MelismaKit 最初是我们为 macOS 播放器写的歌词界面，后来从应用中剥离，成为独立的歌词项目。它把 AMLL 兼容的 TTML 渲染成随播放时间推进的原生图层，负责解析、排版、动画、滚动、命中测试与歌词点击回调。音频时钟、曲库、封面、主题与窗口生命周期由接入方负责。
+MelismaKit 最初是我们为 macOS 播放器写的歌词界面，后来从我们的应用中剥离，成为独立的歌词项目。它把 AMLL 兼容的 TTML 渲染成随播放时间推进的原生图层，负责解析、排版、动画、滚动、命中测试与歌词点击回调。音频时钟、曲库、封面、主题与窗口生命周期由接入方负责。
 
 歌词的计时、布局、动效与交互基于 AMLL（Apple Music-like Lyrics）的源码开发。AMLL 是 Web 端实现，使用 TypeScript、DOM 与浏览器渲染；MelismaKit 把相关行为转写为 Swift，运行在 AppKit、Core Text 与 Core Animation 上。
 

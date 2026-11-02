@@ -4,7 +4,7 @@ MelismaKit 以 GNU Affero 通用公共许可证第 3 版（AGPL 3.0）分发。�
 
 ## 项目起源
 
-MelismaKit 最初是我们为 macOS 播放器写的歌词界面，后来从应用中剥离，成为独立的歌词项目。原生渲染器、解码器、值模型、测试、合成测试固件（synthetic fixtures）、Demo 与 Probe 随包维护。
+MelismaKit 最初是我们为 macOS 播放器写的歌词界面，后来从我们的应用中剥离，成为独立的歌词项目。原生渲染器、解码器、值模型、测试、合成测试固件（synthetic fixtures）、Demo 与 Probe 随包维护。
 
 ## AMLL
 
