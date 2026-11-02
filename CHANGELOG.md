@@ -2,6 +2,12 @@
 
 本项目的版本记录从 `0.2.0` 开始。格式参考 Keep a Changelog，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### 新增
+
+- 位置弹簧优先使用 `springDuration` 与 `springBounce`，默认 `0.55` 与 `0.65`；`positionSpring` 保留为底层覆盖。
+
 ## [0.3.0] - 2026-11-02
 
 这个版本把 MelismaKit 正式整理为独立的 macOS 歌词组件，并集中修复了增量安装与对唱间奏的行为。

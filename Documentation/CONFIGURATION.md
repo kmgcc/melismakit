@@ -65,7 +65,6 @@
 | `bakeSettledBlur` | `Bool` | `true` | 把静止行的模糊烘焙进位图，把每帧高斯合成降为一次 |
 | `scale` | `Bool` | `true` | 焦点行的缩放差异 |
 | `spring` | `Bool` | `true` | 使用弹簧滚动；关闭时使用直接定位 |
-| `positionSpring` | `SpringParameters?` | `nil` | 覆盖焦点滚动弹簧；`nil` 使用 profile 默认值 |
 
 ### 性能
 
@@ -74,6 +73,16 @@
 | `cacheBudgetBytes` | `Int` | `6 * 1024 * 1024` | 字形缓存预算 |
 | `renderScale` | `Double` | `1` | 相对 backing scale 的渲染比例，范围约 `0.35...1` |
 | `fpsCap` | `Int` | `0` | DisplayLink 帧率上限；`0` 跟随显示器原生刷新率 |
+
+### 位置弹簧
+
+位置弹簧优先使用 `springDuration` 与 `springBounce`，默认值为 `0.55` 与 `0.65`；这两个值与播放器的歌词弹簧设置采用同一套语义。需要完全控制质量、阻尼与刚度时，设置 `positionSpring`。
+
+| 属性 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `springDuration` | `Double` | `0.55` | 位置弹簧持续时间，秒 |
+| `springBounce` | `Double` | `0.65` | 位置弹簧反弹 |
+| `positionSpring` | `SpringParameters?` | `nil` | 底层弹簧参数；设置后优先于前两者 |
 
 ### 封面模糊与全屏
 
@@ -139,7 +148,7 @@ SpringParameters(mass: 1, damping: 20, stiffness: 100, soft: false)
 - `mass`、`damping`、`stiffness` 是标准弹簧参数。
 - `soft: true` 会钳制参数以抑制过冲。
 - 预置：`.position`、`.scale`、`.background`；`SpringParameters.nonBouncyPosition(from:)` 返回抑制回弹的版本。
-- `SpringParameters.positionOverride(interval:slow:end:profile:)` 根据行间距离生成位置弹簧。
+- `SpringParameters.position(duration:bounce:)` 把两个高层参数解析为位置弹簧。
 
 ## 4. 计时配置
 
@@ -209,7 +218,7 @@ configuration.channelBlend = .init(
 | `.currentPlayer` | 默认播放器预设：保留并行前景高亮、间奏前后微调、5 秒浏览恢复 |
 | `.upstream` | 更贴近上游 AMLL 可观察行为的时间线清理与间奏节奏 |
 
-普通接入使用默认值即可。切换 profile 会改变间奏边界、高亮保留与部分弹簧参数，属于行为级选择。
+普通接入使用默认值即可。切换 profile 会改变间奏边界、高亮保留与浏览恢复时间，属于行为级选择。
 
 ### 其他枚举
 

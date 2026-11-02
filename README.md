@@ -169,6 +169,8 @@ configuration.fontName = "Helvetica Neue"
 configuration.fontNameCJK = "PingFang SC"
 configuration.fontSize = 34
 configuration.alignPosition = 0.32
+configuration.springDuration = 0.55
+configuration.springBounce = 0.65
 configuration.showTranslation = true
 configuration.showRuby = true
 configuration.palette.mainActive = .white
@@ -178,6 +180,8 @@ configuration.fpsCap = 60
 configuration.renderScale = 0.75
 view.configuration = configuration
 ```
+
+位置弹簧优先使用 `springDuration` 与 `springBounce`；需要完全控制底层参数时再设置 `positionSpring`。
 
 可用选项、默认值与常用组合见 [配置参考](Documentation/CONFIGURATION.md)。
 

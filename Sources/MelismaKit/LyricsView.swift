@@ -161,8 +161,6 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
     private var gapLastMedia = -Double.infinity
     private var lastFocus = -1
     private var lastFocusTime: Double?
-    private var focusInterval: Double?
-    private var currentPositionSpring = SpringParameters.position
     /// A document load starts rows below the viewport. A surface that was
     /// hidden and becomes visible again uses the separate gather animation so
     /// the current row stays anchored while its neighbours close in around it.
@@ -204,7 +202,7 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         // Entry motion must retain a real under-damped position solver. A
         // critically damped fallback makes the load animation look like a
         // linear translation and removes the requested settle-back motion.
-        configuration.positionSpring ?? .position
+        configuration.effectivePositionSpring
     }
 
     /// The interlude marker occupies a real layout slot, rather than being
@@ -559,12 +557,6 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if interaction.suspended { focus = interaction.frozenFocus }
         let focusChanged = focus != lastFocus
         if focusChanged || seek || snapshot.interlude != gapIdentity {
-            focusInterval = focus>0 && focus<prepared.count ? prepared[focus].range.start-prepared[focus-1].range.start : nil
-            if focusInterval != nil || seek || snapshot.interlude != nil {
-                currentPositionSpring = seekPreview
-                    ? .nonBouncyPosition()
-                    : .position(interval:focusInterval,slow:seek || snapshot.interlude != nil,end:snapshot.endOfSong,profile:configuration.profile)
-            }
             lastFocusTime = now; lastFocus = focus
         }
         var heights: [Double] = []
@@ -646,9 +638,10 @@ func usesVisualWordTiming(_ line: LyricLine, document: LyricsDocument) -> Bool {
         if !startingEntry, runningEntryAnimation != nil, configuration.spring {
             prewarmEntryContent(focus: focus, origin: origin, offsets: offsets, now: now, scale: scale)
         }
+        let configuredSpring = configuration.effectivePositionSpring
         let position = seekPreview
-            ? .nonBouncyPosition(from: configuration.positionSpring ?? currentPositionSpring)
-            : (configuration.positionSpring ?? currentPositionSpring)
+            ? .nonBouncyPosition(from: configuredSpring)
+            : configuredSpring
         // Clicks cascade in visual reading order. Scrubbing moves the stack
         // directly, and cannot leave delayed springs from a previous click.
         let seekCascade = ((seek && seekMotion == .cascade) || returning) && !reflowed && configuration.spring

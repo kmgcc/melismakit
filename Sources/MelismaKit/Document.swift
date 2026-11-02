@@ -322,6 +322,14 @@ public struct LyricsConfiguration: Equatable, Sendable {
     public var obscenity: ObscenityMode = .disabled
     public var maskCharacter = "*"
     public var timing = LyricsTimingConfiguration()
+    /// Position spring duration in seconds. The default matches the player's
+    /// lyric spring setting.
+    public var springDuration: Double = 0.55
+    /// Position spring bounce. The default matches the player's lyric spring
+    /// setting.
+    public var springBounce: Double = 0.65
+    /// Low-level position spring override. When set, it takes precedence over
+    /// `springDuration` and `springBounce`.
     public var positionSpring: SpringParameters?
     public var bottomText = ""
     public var cacheBudgetBytes = 6 * 1024 * 1024
@@ -334,6 +342,10 @@ public struct LyricsConfiguration: Equatable, Sendable {
     /// is capped to this rate, matching host display-link cap semantics.
     public var fpsCap: Int = 0
     public init() {}
+
+    var effectivePositionSpring: SpringParameters {
+        positionSpring ?? .position(duration: springDuration, bounce: springBounce)
+    }
 
     var usesCoverBlurCompositing: Bool {
         surface == .coverBlurLight || surface == .coverBlurDark

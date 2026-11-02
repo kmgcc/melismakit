@@ -56,7 +56,7 @@ public struct SpringParameters: Equatable, Sendable {
         if bounceOffset > 0 {
             let primary = min(1,bounceOffset)
             // AMLL compresses the primary bounce range quadratically. A cubic
-            // here made the new 0.55/0.75 default almost critically damped,
+            // here made the new 0.55/0.65 default almost critically damped,
             // which looked like a plain translation and removed the settle
             // back that the settings promise.
             damping *= 1-pow(primary,2)*0.55
@@ -68,6 +68,10 @@ public struct SpringParameters: Equatable, Sendable {
             damping *= 1+sqrt(min(1,-bounceOffset/range))*1.15
         }
         return Self(mass:base.mass,damping:min(260,max(0.8,damping)),stiffness:stiffness,soft:false)
+    }
+    /// Convenience spelling for the high-level duration/bounce controls.
+    public static func position(duration: Double, bounce: Double) -> Self {
+        positionOverride(duration: duration, bounce: bounce)
     }
     static func position(interval: Double?, slow: Bool, end: Bool, profile: LyricsProfile) -> Self {
         if slow || interval == nil { return .position }
