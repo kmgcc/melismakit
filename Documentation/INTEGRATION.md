@@ -325,3 +325,33 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 **暂停后仍在动。** 确认暂停时传了 `playing: false`；如果宿主停止了采样但没有通知视图，视图会继续按最后一次状态预测。
 
 **全屏切换后 hover 或模糊不恢复。** 挂载后调用 `setPointerInside(false)`，重新出现时调用 `prepareWakeEntryAnimation()`。
+
+## 14. `LyricsView` 方法速查
+
+| API | 用途 |
+|---|---|
+| `configuration` | 读写当前 `LyricsConfiguration` |
+| `onSeek` | 歌词点击回传源媒体时间 |
+| `onFrame` | 每次渲染后的帧快照；只做轻量诊断 |
+| `document` | 当前已安装文档，只读 |
+| `lastFrame` | 最近一帧的 `LyricsFrame` |
+| `automaticDisplayUpdates` | 开启/关闭 DisplayLink 驱动 |
+| `isDisplayUpdateRunning` | DisplayLink 是否在运行 |
+| `isFollowing` | 是否处于自动跟随 |
+| `load(ttml:time:playing:hostTime:)` | 同步解码并安装 |
+| `install(document:time:playing:hostTime:)` | 安装已解码文档 |
+| `clear(time:playing:hostTime:)` | 清空当前歌词 |
+| `synchronize(time:playing:seek:motion:hostTime:)` | 提交播放采样 |
+| `followCurrentLyrics()` | 立即恢复自动跟随 |
+| `prepareWakeEntryAnimation()` | 重新显示时的入场 |
+| `releaseRenderingResources()` | 释放图层、缓存与 DisplayLink |
+| `pruneTransientCaches()` | 压缩缓存、释放不可见行 |
+| `scroll(by:hostTime:)` | 宿主驱动的滚动 |
+| `setPointerInside(_:hostTime:)` | 同步指针进入/移出 |
+| `setPointerInteractionSuppressed(_:hostTime:)` | 浮层期间抑制指针交互 |
+| `groupIndex(at:)` | 命中测试 |
+| `seekTime(forGroup:)` | 行的源媒体时间 |
+| `snapshotImage(scale:)` | 导出当前画面 |
+| `render(at:)` | 在指定宿主时间显式渲染，供测试/离屏使用 |
+
+`onFrame` 在渲染路径中调用；不要在回调里做同步 I/O、重新布局或再次调用 `render`。`render(at:)` 会推进一次渲染状态，正常接入时不需要手动调用。
