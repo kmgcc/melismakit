@@ -7,13 +7,13 @@
 | 职责 | MelismaKit | 宿主应用 |
 |---|---|---|
 | TTML 解析、计时预处理、行/词时间轴 | 负责 | 提供原始 `Data` 或已解析文档 |
-| 排版、图层、动画、滚动、命中测试 | 负责 | 不操作内部图层 |
+| 排版、图层、动画、滚动、命中测试 | 负责 | 使用 `LyricsView` 的接口 |
 | 歌词点击目标与回传时间 | 通过 `onSeek` 回传 | 执行播放器 Seek |
 | 媒体时钟的采样与预测 | 在采样之间插值 | 提供媒体时间与播放状态 |
-| 曲库、音频播放、封面、主题、持久化 | 不包含 | 负责 |
+| 曲库、音频播放、封面、主题、持久化 | — | 负责 |
 | SwiftUI 生命周期 | 提供薄挂载层 | 持有 `LyricsView` 的生命周期 |
 
-MelismaKit 不读取应用 Bundle、设置存储、主题存储或曲库注册表。它只通过值类型、配置对象、`onSeek` 与 `synchronize` 和宿主通信。
+MelismaKit 的输入限于值类型、配置对象、`onSeek` 与 `synchronize`；应用 Bundle、设置存储、主题存储与曲库注册表由宿主管理。
 
 ## 2. 最小生命周期
 
@@ -42,7 +42,7 @@ final class LyricsPanelController: NSViewController {
 }
 ```
 
-`LyricsView` 没有内在内容尺寸；它填满 Auto Layout 或父视图给它的 bounds。请显式设置宽高约束，或在 `viewDidLayout` 中设置 frame。
+`LyricsView` 的内容尺寸由外部约束决定；它填满 Auto Layout 或父视图给它的 bounds。请显式设置宽高约束，或在 `viewDidLayout` 中设置 frame。
 
 ### SwiftUI
 
@@ -57,9 +57,9 @@ struct LyricsPanel: View {
 }
 ```
 
-`MelismaKitViewRepresentable` 只负责把已有的 `LyricsView` 放进 SwiftUI 视图树。它不复制配置、播放状态或回调。`LyricsView` 应当由 `@StateObject` 控制器、`@State` 中的引用类型模型，或更高层的服务持有。
+`MelismaKitViewRepresentable` 负责把已有的 `LyricsView` 放进 SwiftUI 视图树；配置、播放状态与回调保留在宿主侧。`LyricsView` 应当由 `@StateObject` 控制器、`@State` 中的引用类型模型，或更高层的服务持有。
 
-不要这样写：
+反例：
 
 ```swift
 // 错误：SwiftUI 重建视图时会创建新的渲染器
@@ -76,7 +76,7 @@ var body: some View {
 try lyrics.load(ttml: data, time: mediaTime, playing: isPlaying)
 ```
 
-`load` 会先解码，再替换当前文档。解码失败会抛出 `LyricsError.invalidTTML`，上一份有效歌词保持不变。
+`load` 会先解码，再替换当前文档。解码失败会抛出 `LyricsError.invalidTTML`，上一份有效歌词继续显示。
 
 ### 异步解析
 
@@ -85,7 +85,7 @@ let document = try await TTMLDecoder().decodeAsync(data)
 lyrics.install(document: document, time: mediaTime, playing: isPlaying)
 ```
 
-`TTMLDecoder` 是 `Sendable` 值类型；`LyricsDocument` 也是不可变值数据。可以在后台任务中解码，再回到主线程安装。
+`TTMLDecoder` 是 `Sendable` 值类型；`LyricsDocument` 同样采用值语义。可以在后台任务中解码，再回到主线程安装。
 
 ### 清空
 
@@ -93,21 +93,21 @@ lyrics.install(document: document, time: mediaTime, playing: isPlaying)
 lyrics.clear(time: mediaTime, playing: isPlaying)
 ```
 
-没有歌词时不要 `load` 一份空字符串并期待它被当作“无歌词”；使用 `clear`。它保留播放状态，之后可以原子地安装下一份文档。
+歌词为空时使用 `clear`；`load` 用于一份完整文档。`clear` 保留播放状态，之后可以原子地安装下一份文档。
 
 ### 文档缓存
 
-`LyricsDocument` 可以安全地缓存和共享。一个常见的做法是按“曲目 ID + 歌词文本”缓存最近两份文档，切歌时先命中缓存，避免重复解析。不要在每次 `synchronize` 时重新 `load`；那会重建图层并打断动画。
+`LyricsDocument` 可以安全地缓存和共享。一个常见的做法是按“曲目 ID + 歌词文本”缓存最近两份文档，切歌时先命中缓存，减少重复解析。`synchronize` 只提交播放采样；重新 `load` 会重建图层并打断动画，适合放在切歌或文档变更时。
 
 ## 5. 时钟契约
 
 ### 单位
 
-所有公开时间都是**秒**，属于媒体时间域。不要传毫秒、`CACurrentMediaTime()` 的绝对秒数或播放器内部帧号。
+所有时间参数一律使用**秒**，属于媒体时间域；毫秒、`CACurrentMediaTime()` 的绝对秒数或播放器内部帧号需要先换算为媒体秒。
 
 ### 采样频率
 
-宿主不需要每帧调用。播放、暂停、Seek、切歌、窗口重新出现时各调用一次即可；`LyricsView` 会在两次采样之间根据 `hostTime` 预测。也可以以 10–30 Hz 周期采样，行为相同。
+宿主按事件采样即可。播放、暂停、Seek、切歌、窗口重新出现时各调用一次；`LyricsView` 会在两次采样之间根据 `hostTime` 预测。也可以以 10–30 Hz 周期采样，行为相同。
 
 ```swift
 lyrics.synchronize(time: player.currentTime, playing: player.isPlaying)
@@ -115,7 +115,7 @@ lyrics.synchronize(time: player.currentTime, playing: player.isPlaying)
 
 ### hostTime
 
-`hostTime` 默认取 `CACurrentMediaTime()`。只有当宿主能提供同一时钟域的单调时间时才显式传入；否则省略。
+`hostTime` 默认取 `CACurrentMediaTime()`。宿主能提供同一时钟域的单调时间时显式传入，其余场景使用默认值。
 
 ```swift
 lyrics.synchronize(
@@ -141,11 +141,11 @@ lyrics.synchronize(
 - `motion: .cascade` 用于点击歌词后的级联滚动。
 - `motion: .preview` 用于拖动时的预览状态。
 
-`synchronize` 返回视图当前预测的媒体时间，通常可以忽略；需要和播放器对齐时可以使用返回值。
+`synchronize` 返回视图当前预测的媒体时间；需要和播放器对齐时可以使用返回值。
 
 ### 暂停
 
-暂停时传 `playing: false`，时间保持精确。不要停止采样却继续把 `playing` 留在 `true`，否则视图会按旧速度继续预测。
+暂停时传 `playing: false`，时间保持精确。停止采样时一并传入当前播放状态，让视图按最新状态渲染；`playing` 停留在 `true` 时，视图会按旧速度继续预测。
 
 ## 6. 点击与交互
 
@@ -155,12 +155,12 @@ lyrics.onSeek = { mediaTime in
 }
 ```
 
-`onSeek` 的参数是源媒体时间，已经包含 `configuration.timing.seekOffset`。若宿主还有全局延迟，应当在前置处理中合并，不要再次叠加。
+`onSeek` 的参数是源媒体时间，已经包含 `configuration.timing.seekOffset`。若宿主还有全局延迟，在前置处理中合并，让 `onSeek` 的偏移只应用一次。
 
 视图自身处理：
 
 - 鼠标悬停：清除行模糊，移出后按 `motion.pointerExitDelay` 恢复；
-- 滚轮：手动浏览，暂停自动跟随；5 秒无操作后恢复，或调用 `followCurrentLyrics()`；
+- 滚轮：手动浏览，暂停自动跟随；5 秒空闲后恢复，或调用 `followCurrentLyrics()`；
 - 右键：复制当前行歌词；
 - 点击：回传 Seek 时间。
 
@@ -170,7 +170,7 @@ lyrics.onSeek = { mediaTime in
 lyrics.setPointerInteractionSuppressed(true)
 ```
 
-恢复时传 `false`，视图会根据当前屏幕指针位置重新协调 hover 状态，而不是等待下一次鼠标移动。
+恢复时传 `false`，视图会按当前屏幕指针位置立即协调 hover 状态。
 
 需要在宿主重新挂载视图时恢复指针状态，可以调用：
 
@@ -205,7 +205,7 @@ let image = lyrics.snapshotImage(scale: 2)
 lyrics.automaticDisplayUpdates = false
 ```
 
-窗口被遮挡、切到后台、进入迷你播放器时停止 DisplayLink。`LyricsView` 也会在 `viewDidHide`、窗口最小化或不可见时自行停止，但显式关闭更可靠。
+窗口被遮挡、切到后台、进入迷你播放器时停止 DisplayLink。`LyricsView` 也会在 `viewDidHide`、窗口最小化或移出屏幕时自行停止；显式关闭让状态更可控。
 
 ### 重新出现
 
@@ -214,7 +214,7 @@ lyrics.automaticDisplayUpdates = true
 lyrics.prepareWakeEntryAnimation()
 ```
 
-`prepareWakeEntryAnimation()` 只在文档已安装、已有首帧且不在入场动画中时生效，避免把一次加载入场打断成第二次动画。
+`prepareWakeEntryAnimation()` 在文档已安装、已有首帧且入场动画处于空闲状态时生效，让一次加载的入场保持完整。
 
 ### 彻底移除
 
@@ -230,7 +230,7 @@ lyrics.releaseRenderingResources()
 lyrics.pruneTransientCaches()
 ```
 
-把字形缓存压到预算的一半，并释放不可见行的内容。适合在进入后台、长时间暂停或内存压力通知中调用。
+把字形缓存压到预算的一半，并释放视口外的行内容。适合在进入后台、长时间暂停或内存压力通知中调用。
 
 ## 8. 配置
 
@@ -250,10 +250,10 @@ lyrics.configuration = configuration
 
 - `fontNameCJK`：主字体只覆盖拉丁字形时，CJK 会回退到系统字体；显式指定 CJK 字体可以让中日韩文与拉丁文的字重一致。
 - `alignPosition`：焦点行在视图高度中的相对位置，`0.35` 表示偏上；窗口面板通常可以在 `0.28–0.38` 之间调整。
-- `renderScale`：相对于 backing scale 的渲染比例，不是绝对像素；全屏常驻 surface 可以用 `0.75`。
+- `renderScale`：相对于 backing scale 的渲染比例，以 backing scale 为基准；全屏常驻 surface 可以用 `0.75`。
 - `fpsCap`：`0` 跟随显示器原生刷新率；需要省电时设 `60`。
-- `timing.trackOffset`：只影响展示时间；`timing.seekOffset`：只影响 `onSeek` 回传的时间。不要混用。
-- `surface` 与 `coverBlur*`：只有在做封面模糊或多层合成时才需要；普通窗口保持 `.window` 与 `.full`。
+- `timing.trackOffset`：只影响展示时间；`timing.seekOffset`：只影响 `onSeek` 回传的时间。两者分别作用于展示与回传，各司其职。
+- `surface` 与 `coverBlur*`：封面模糊或多层合成场景使用这些字段；普通窗口保持 `.window` 与 `.full`。
 
 ## 9. 多 surface
 
@@ -262,7 +262,7 @@ lyrics.configuration = configuration
 - 每个可见 surface 一个 `LyricsView`；
 - 同一首歌的 `LyricsDocument` 可以在多个视图之间共享；
 - 每个 surface 自己持有配置与可见性状态；
-- 不要把一个 `LyricsView` 同时挂到两个父视图；
+- 一个 `LyricsView` 对应一个父视图；
 - 切换宿主（窗口 ↔ 全屏）时，先关闭旧宿主，再挂到新宿主，并调用 `prepareWakeEntryAnimation()`。
 
 ```swift
@@ -275,12 +275,12 @@ fullscreenLyrics.install(document: document, time: t, playing: p)
 
 `TTMLDecoder.decode` 与 `LyricsView.load` 只抛出 `LyricsError.invalidTTML(String)`。常见原因：
 
-- 根元素不是 TTML 命名空间中的 `tt`；
+- 根元素需要是 TTML 命名空间中的 `tt`；
 - 文档包含外部实体或 DOCTYPE；
-- 时间属性无法解析；
-- 歌词结构缺少必要的 `p` / `span`。
+- 时间属性解析失败；
+- 歌词结构需要包含 `p` / `span`。
 
-接入时建议保留“上一份有效歌词”，在解码失败时记录错误但不要清空画面。MelismaKit 的 `load` 已经遵循这个顺序：解析成功后才替换文档。
+接入时建议保留“上一份有效歌词”，在解码失败时记录错误并保留当前画面。MelismaKit 的 `load` 已经遵循这个顺序：解析成功后才替换文档。
 
 ## 11. 更新依赖
 
@@ -292,7 +292,7 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 
 更新后重新运行宿主测试，重点检查：
 
-- 公开 API 是否有弃用或签名变化；
+- API 的签名变化与弃用情况；
 - 自定义配置字段是否仍存在；
 - 歌词点击回传时间是否仍符合宿主 Seek 策略；
 - 全屏与多 surface 的重新挂载是否正常。
@@ -301,8 +301,8 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 
 ## 12. 接入检查清单
 
-- [ ] `LyricsView` 由控制器/模型持有，不在 SwiftUI `body` 中创建。
-- [ ] 传入的是秒，不是毫秒。
+- [ ] `LyricsView` 由控制器/模型持有，并在其中创建。
+- [ ] 传入的是秒。
 - [ ] 播放/暂停/Seek/切歌都会调用 `synchronize`。
 - [ ] Seek 使用 `seek: true` 与合适的 `motion`。
 - [ ] `onSeek` 的偏移只应用一次。
@@ -314,17 +314,17 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 
 ## 13. 常见问题
 
-**歌词不显示。** 检查视图 bounds 是否为零、是否已加入窗口、`document` 是否非空、`automaticDisplayUpdates` 是否为 `true`、调色板 alpha 是否为零。
+**歌词区域为空。** 检查视图 bounds、窗口挂载、`document` 内容、`automaticDisplayUpdates` 与调色板 alpha。
 
 **文字发虚。** `renderScale` 小于 1 会降低 glyph mask 分辨率；全屏或 5K 屏幕上先尝试 `1`，再按性能预算下调。
 
-**时间越走越偏。** 检查单位与 `hostTime` 时钟域。不要传播放器内部的绝对主机时间作为媒体时间。
+**时间越走越偏。** 检查单位与 `hostTime` 时钟域；媒体时间使用播放器给出的播放位置，主机绝对时间只用于 `hostTime`。
 
 **点击 Seek 偏了几百毫秒。** 通常是 `trackOffset` 与 `seekOffset` 重复叠加，或宿主又在 `onSeek` 外加了一次全局延迟。
 
-**暂停后仍在动。** 确认暂停时传了 `playing: false`；如果宿主停止了采样但没有通知视图，视图会继续按最后一次状态预测。
+**暂停后仍在动。** 暂停时传 `playing: false`；停止采样时同步通知视图，让视图按最新状态渲染。
 
-**全屏切换后 hover 或模糊不恢复。** 挂载后调用 `setPointerInside(false)`，重新出现时调用 `prepareWakeEntryAnimation()`。
+**全屏切换后 hover 或模糊保持旧状态。** 挂载后调用 `setPointerInside(false)`，重新出现时调用 `prepareWakeEntryAnimation()`。
 
 ## 14. `LyricsView` 方法速查
 
@@ -345,7 +345,7 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 | `followCurrentLyrics()` | 立即恢复自动跟随 |
 | `prepareWakeEntryAnimation()` | 重新显示时的入场 |
 | `releaseRenderingResources()` | 释放图层、缓存与 DisplayLink |
-| `pruneTransientCaches()` | 压缩缓存、释放不可见行 |
+| `pruneTransientCaches()` | 压缩缓存、释放视口外的行 |
 | `scroll(by:hostTime:)` | 宿主驱动的滚动 |
 | `setPointerInside(_:hostTime:)` | 同步指针进入/移出 |
 | `setPointerInteractionSuppressed(_:hostTime:)` | 浮层期间抑制指针交互 |
@@ -354,4 +354,4 @@ Xcode：**File → Packages → Update to Latest Package Versions**。
 | `snapshotImage(scale:)` | 导出当前画面 |
 | `render(at:)` | 在指定宿主时间显式渲染，供测试/离屏使用 |
 
-`onFrame` 在渲染路径中调用；不要在回调里做同步 I/O、重新布局或再次调用 `render`。`render(at:)` 会推进一次渲染状态，正常接入时不需要手动调用。
+`onFrame` 在渲染路径中调用；回调里适合轻量诊断，同步 I/O、重新布局与再次调用 `render` 放到渲染路径之外。`render(at:)` 会推进一次渲染状态，正常接入由 DisplayLink 驱动。

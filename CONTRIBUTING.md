@@ -4,21 +4,21 @@ MelismaKit 的目标是成为一个可以独立接入、独立维护的 macOS �
 
 ## 1. 先确认边界
 
-这个仓库只做歌词渲染。以下内容不属于这里：
+MelismaKit 专注歌词渲染。以下能力由宿主或其他项目提供：
 
 - 音频播放、解码、设备管理；
 - 曲库、文件扫描、歌词搜索与下载；
 - 封面提取、主题存储、应用设置；
 - 某个具体播放器的窗口、全屏、皮肤或状态模型；
-- LRC / YRC / ASS 格式的内置解析（可以新增解码器，但不要把它和视图耦合）。
+- LRC / YRC / ASS 等格式的转换：先转为 TTML，再交给 MelismaKit 解码；新增解码器时与视图保持解耦。
 
-如果你的改动需要引入上述依赖，先开 issue 讨论边界，而不是直接提交。
+改动涉及上述能力时，先开 issue 讨论边界。
 
 ## 2. 开发环境
 
 - macOS 15 或更高版本
 - Xcode 26 或兼容的 Swift 6.1+ 工具链
-- 无第三方依赖；不需要额外的包管理器或环境变量
+- 依赖限于 macOS 自带框架；开发环境使用 Xcode 与 Swift 工具链
 
 ```sh
 git clone https://github.com/kmgcc/melismakit.git
@@ -28,12 +28,12 @@ swift test
 swift run MelismaKitDemo
 ```
 
-Demo 是 AppKit 应用，必须在有窗口会话的 macOS 上运行。Probe 与 Bench 支持无交互运行。
+Demo 是 AppKit 应用，必须在有窗口会话的 macOS 上运行。Probe 与 Bench 支持命令行运行。
 
 ## 3. 仓库结构
 
 ```text
-Sources/MelismaKit/           核心渲染、解码、布局、动效、公开 API
+Sources/MelismaKit/           核心渲染、解码、布局、动效、API
 Sources/MelismaKitSwiftUI/    SwiftUI 挂载层
 Sources/MelismaKitDemo/       AppKit 示例
 Sources/MelismaKitProbe/      确定性渲染探针
@@ -42,7 +42,7 @@ Sources/MelismaKitBenchCore/  测量与合成语料
 Sources/MelismaKitParity/     上游行为对照工具
 Tests/MelismaKitTests/        XCTest
 Fixtures/                     可复现的合成 TTML 语料库
-Documentation/                公开文档
+Documentation/                文档
 script/                       基准门禁、截图与辅助脚本
 ```
 
@@ -74,18 +74,18 @@ swift run MelismaKitProbe Sources/MelismaKitDemo/Resources/complex.ttml /tmp/pro
 
 - 使用 Swift 6.1 tools version，包保持 `swiftLanguageModes: [.v5]`。
 - 视图与 UI 状态在 `@MainActor`；纯值模型保持 `Sendable`。
-- 优先使用值类型和纯函数。不要把宿主的状态、通知或单例带进组件。
-- 不新增第三方依赖。系统框架足够时，不引入包。
-- 不操作内部图层的公共 API 不属于宿主接口；需要新能力时先扩展 `LyricsConfiguration` 或明确的视图方法。
-- 日志使用 `OSLog`，不要在库里留 `print`。
-- 公开 API 需要文档注释；参数单位、默认值和线程约束要写清楚。
-- 文档使用中文；代码注释沿用所在文件的现有语言，不要为了统一而大面积重写注释。
+- 优先使用值类型和纯函数。组件只接收宿主传入的值、配置与回调。
+- 依赖保持在 macOS 自带框架内；系统框架够用时直接使用。
+- 宿主接口保持为 `LyricsConfiguration` 与明确的视图方法；内部图层的 API 留在组件内部。需要新能力时先扩展配置或视图方法。
+- 日志使用 `OSLog`。
+- API 需要文档注释；参数单位、默认值和线程约束要写清楚。
+- 文档使用中文；代码注释沿用所在文件的现有语言，统一语言时以局部修改为主。
 
 ### 性能约定
 
 - 改有性能含义的路径前，先记录当前数字。
 - 纯性能改动与视觉改动分开提交。
-- 不在主线程做可以移到后台的解析；安装与图层操作仍然留在主线程。
+- 解析可以移到后台；安装与图层操作留在主线程。
 - 新增缓存必须有明确预算与清理路径。
 
 ### 许可证约定
@@ -96,16 +96,16 @@ swift run MelismaKitProbe Sources/MelismaKitDemo/Resources/complex.ttml /tmp/pro
 2. 在 [NOTICE](NOTICE) 增加归属说明；
 3. 在相关源文件头部加派生声明。
 
-只抄结构、不记录来源，属于许可证合规缺陷，不是风格问题。
+转译上游结构时，在同一次提交中记录来源；这是许可证合规要求。
 
 ## 6. 提交与 PR
 
 - 一个提交只做一件事。标题描述可观察行为，例如 `Keep the last line visible at the end of a song`。
-- 不把格式化、重命名和行为改动混在一起。
-- PR 说明：改了什么、为什么、关键取舍、未覆盖的边界、实际运行的验证命令。
+- 格式化、重命名与行为改动分别提交。
+- PR 说明：改了什么、为什么、关键取舍、待验证的边界、实际运行的验证命令。
 - 行为或视觉改动附截图/视频；性能改动附前后数字。
-- 新增公开 API 或修改配置语义时，同步更新 `README.md`、`Documentation/` 与 `CHANGELOG.md`。
-- 不提交 `.build/`、DerivedData、临时截图或本机路径。
+- 新增 API 或修改配置语义时，同步更新 `README.md`、`Documentation/` 与 `CHANGELOG.md`。
+- 提交内容保持为源码与文档；`.build/`、DerivedData、临时截图与本机路径留在工作区。
 
 ### Issue
 
@@ -143,4 +143,4 @@ Bug 报告请包含：
 - 维护者看 [架构](Documentation/ARCHITECTURE.md)、[测试指南](Documentation/TESTING.md)、[性能](Documentation/PERFORMANCE.md)。
 - 许可证与溯源看 [LICENSING](Documentation/LICENSING.md)、[PROVENANCE](Documentation/PROVENANCE.md)、[NOTICE](NOTICE)。
 
-文档里不要写内部阶段编号、临时计划、个人机器路径或某个宿主应用的私有实现。这个仓库的读者是第一次见到 MelismaKit 的开发者。
+文档面向第一次见到 MelismaKit 的开发者，聚焦组件本身的用法与实现；内部阶段编号、临时计划、个人机器路径与宿主应用的实现细节留在维护者手中。

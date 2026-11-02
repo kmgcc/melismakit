@@ -39,11 +39,11 @@ timing, layout, motion, and interaction behavior; the native renderer, the XML
 decoder, the layout engine, and the value model are original work.
 
 The material has been modified: it was translated from TypeScript to Swift and
-adapted to AppKit, Core Text, and Core Animation. MelismaKit is not an official
-port of AMLL and is not affiliated with or endorsed by the AMLL project.
+adapted to AppKit, Core Text, and Core Animation. MelismaKit is an independent
+project maintained by its own contributors; AMLL is maintained by its authors.
 
-A symbol-by-symbol derivation list, including the items that could not be
-resolved either way, is in Documentation/PROVENANCE.md.
+A symbol-by-symbol derivation list, including the items marked as pending
+verification, is in Documentation/PROVENANCE.md.
 
 Because AMLL is licensed under AGPL-3.0-only, and this project is likewise
 licensed AGPL-3.0-only, the combined work is distributed under AGPL-3.0-only.
@@ -60,16 +60,18 @@ the published behavior of the Pushkine spring solver.
     Author:   github.com/pushkine
     License:  MIT
 
-The solver's source is not bundled here. Only the reference behavior was
-consulted, and the test comment records the MIT origin. MIT is compatible with
-AGPL-3.0-only.
+The closed-form test oracle described above is part of this package's test
+code; the solver's source remains in its original repository. The reference
+behavior was consulted, and the test comment records the MIT origin. MIT is
+compatible with AGPL-3.0-only.
 
 --------------------------------------------------------------------------------
 Platform frameworks
 --------------------------------------------------------------------------------
 
 AppKit, Core Text, Core Animation, Core Image, Foundation, NaturalLanguage, and
-SwiftUI are Apple platform libraries. They are linked against, not bundled.
+SwiftUI are platform libraries supplied by Apple and linked against at build
+time.
 
 --------------------------------------------------------------------------------
 Fixtures and assets
@@ -77,7 +79,7 @@ Fixtures and assets
 
 The TTML files under Sources/MelismaKitDemo/Resources and
 Tests/MelismaKitTests/Fixtures are original synthetic lyrics written for this
-project's tests and demo. They are not transcriptions of any real song.
+project's tests and demo.
 
-Do not add downloaded lyrics, artwork, audio, or other third-party assets
-without recording their source and license in Documentation/LICENSING.md.
+Third-party lyrics, artwork, audio, and other assets may be added once their
+source and license are recorded in Documentation/LICENSING.md.

@@ -1,6 +1,6 @@
 # 文档
 
-MelismaKit 的公开文档按读者分成三组。
+MelismaKit 的文档按读者分成三组。
 
 ## 使用
 
@@ -23,6 +23,6 @@ MelismaKit 的公开文档按读者分成三组。
 
 | 文档 | 内容 |
 |---|---|
-| [许可证](LICENSING.md) | AGPL-3.0-only 与分发边界 |
-| [源码溯源](PROVENANCE.md) | 派生、原创与无法确定的符号清单 |
+| [许可证](LICENSING.md) | AGPL 3.0 与第三方归属 |
+| [源码溯源](PROVENANCE.md) | 派生、原创与待考条目 |
 | [NOTICE](../NOTICE) | 第三方归属声明 |

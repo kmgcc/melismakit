@@ -6,13 +6,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        MelismaKit 只负责歌词渲染。音频播放、曲库、歌词抓取、封面提取与主题持久化属于宿主应用。
+        MelismaKit 专注歌词渲染。音频播放、曲库、歌词抓取、封面提取与主题持久化属于宿主应用。
 
   - type: textarea
     id: problem
     attributes:
       label: 要解决的问题
-      description: 当前哪里不够用？请描述具体场景，而不只是想要的 API 名称。
+      description: 请描述具体场景、当前体验与期望行为。
     validations:
       required: true
 
@@ -39,7 +39,7 @@ body:
         - 解码 / TTML 支持
         - 排版 / 多语言
         - 动效 / 渲染
-        - 配置 / 公开 API
+        - 配置 / API
         - 性能
         - Demo / Probe / Bench
         - 文档

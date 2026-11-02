@@ -54,7 +54,7 @@ CI 会同时跑 Debug 与 Release 的 warnings-as-errors、测试、Probe 冒烟
 | `IncrementalInstallationTests` | 切歌/重装时保留图层、增量布局与状态转换 |
 | `SyntheticCorpusTests` | `Fixtures/` 语料库的字节级完整性与生成器一致性 |
 
-新增公开行为时，至少补一个确定性单元测试；改渲染状态机时，优先在 `BehaviorRegressionTests` 或 `IncrementalInstallationTests` 中补回归。
+新增可观察行为时，至少补一个确定性单元测试；改渲染状态机时，优先在 `BehaviorRegressionTests` 或 `IncrementalInstallationTests` 中补回归。
 
 ## 4. 语料库
 
@@ -66,7 +66,7 @@ CI 会同时跑 Debug 与 Release 的 warnings-as-errors、测试、Probe 冒烟
 - CJK、Emoji、RTL 与组合字符；
 - 长词压力。
 
-`Fixtures/SHA256SUMS.txt` 记录字节哈希。`MelismaKitBench --verify-fixtures` 会重新生成并比对；不一致会返回非零。除非是刻意的语料库更新，不要提交重新生成的结果。
+`Fixtures/SHA256SUMS.txt` 记录字节哈希。`MelismaKitBench --verify-fixtures` 会重新生成并比对；结果相符时通过，出现差异时脚本以失败退出。语料库需要更新时，把重新生成的结果与生成器变更一起提交。
 
 Demo 另有 `Sources/MelismaKitDemo/Resources/` 下的展示样本；它们与测试语料库分开维护。
 
@@ -74,9 +74,9 @@ Demo 另有 `Sources/MelismaKitDemo/Resources/` 下的展示样本；它们与�
 
 `MelismaKitProbe` 用内置合成文档或指定 TTML 渲染固定帧数，输出帧耗时与缓存统计。它适合：
 
-- 快速确认渲染器没有崩溃或明显回退；
+- 快速确认渲染器稳定、帧耗时保持在预算内；
 - 生成 README 中的确定性截图；
-- 在没有完整应用的情况下复现布局问题。
+- 脱离完整应用复现布局问题。
 
 ```sh
 swift run MelismaKitProbe Sources/MelismaKitDemo/Resources/duet-ruby.ttml /tmp/probe 10 760 720 --paused
@@ -86,13 +86,13 @@ Probe 默认把截图写到输出目录。提交视觉改动时，附上同一�
 
 ## 6. 视觉检查
 
-自动化测试不能替代人工视觉确认。改动排版、动效或合成后，至少检查：
+人工视觉确认仍是必要环节。改动排版、动效或合成后，至少检查：
 
-- 窗口与不透明全屏两种 surface；
+- 窗口与实色全屏两种 surface；
 - 播放、暂停、Seek、切歌；
 - 窗口缩放与多显示器 backing scale；
 - 指针进入/移出、滚轮浏览、点击 Seek；
-- 长歌词、无歌词、只有翻译/Ruby 的文档；
+- 长歌词、空歌词、仅含翻译/Ruby 的文档；
 - 深色与浅色调色板；
 - 低 `renderScale` 与 60 fps 上限下的清晰度/流畅度取舍。
 
@@ -124,9 +124,9 @@ swift run -c release MelismaKitBench --scale 120 --json > /tmp/bench.json
 python3 script/bench_gate.py /tmp/bench.json
 ```
 
-## 8. 包测试不覆盖什么
+## 8. 包测试的覆盖范围
 
-组件测试不覆盖宿主特有的窗口、全屏、皮肤、主题映射、播放器时钟与资源生命周期。接入方应在自己的工程中验证：
+组件测试覆盖解码、计时、布局与渲染；宿主特有的窗口、全屏、皮肤、主题映射、播放器时钟与资源生命周期由接入方在自己的工程中验证：
 
 - 窗口、全屏、迷你播放器与预览 surface；
 - 播放器 Seek、切歌、暂停与恢复；
@@ -138,7 +138,7 @@ python3 script/bench_gate.py /tmp/bench.json
 ## 9. 添加测试
 
 - 纯逻辑优先：解码、计时、布局与运动采样都应当可以脱离窗口测试。
-- 时间相关的测试使用显式采样，不依赖 `sleep` 或真实墙钟。
-- 渲染状态测试使用 `LyricsView.render(at:)` 或 `snapshotImage`，避免依赖实际显示刷新。
-- 测试夹具使用原创合成文本，不引入真实歌曲歌词。
-- 新测试文件加入 `Tests/MelismaKitTests/`，不需要改 `Package.swift`（测试 target 自动包含目录）。
+- 时间相关的测试使用显式采样，时钟由测试用例提供。
+- 渲染状态测试使用 `LyricsView.render(at:)` 或 `snapshotImage`，让测试脱离实际显示刷新。
+- 测试夹具使用原创合成文本。
+- 新测试文件加入 `Tests/MelismaKitTests/`，`Package.swift` 保持原样（测试 target 自动包含目录）。
