@@ -1,0 +1,80 @@
+name: Bug 报告
+description: 报告渲染、解码、接入或性能问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请尽量提供最小复现；能附 TTML 片段、配置和截图时，定位会快很多。
+
+  - type: input
+    id: version
+    attributes:
+      label: MelismaKit 版本
+      description: 例如 0.3.0，或 commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 系统与工具链
+      description: macOS 版本、Xcode / Swift 版本、Mac 型号
+    validations:
+      required: true
+
+  - type: dropdown
+    id: integration
+    attributes:
+      label: 接入方式
+      options:
+        - AppKit（LyricsView）
+        - SwiftUI（MelismaKitViewRepresentable）
+        - Demo / Probe / Bench
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 最小、可重复的操作序列
+      placeholder: |
+        1. 加载附带的 TTML
+        2. 在 00:42 处 Seek
+        3. 鼠标移出歌词区域
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现材料
+      description: TTML、配置代码、视图尺寸或可运行的示例工程链接
+      render: swift
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图、录屏或性能数据
+      description: 视觉问题请附截图/录屏；性能问题请附 Bench 或 Instruments 数字
+    validations:
+      required: false

@@ -1,0 +1,47 @@
+name: 功能建议
+description: 提议新的渲染能力、配置项或工具
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MelismaKit 只负责歌词渲染。音频播放、曲库、歌词抓取、封面提取与主题持久化属于宿主应用。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 当前哪里不够用？请描述具体场景，而不只是想要的 API 名称。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 如果已经有想法，可以给出配置字段、API 形状或参考实现。
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已经尝试或考虑过的替代方案
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响范围
+      options:
+        - 解码 / TTML 支持
+        - 排版 / 多语言
+        - 动效 / 渲染
+        - 配置 / 公开 API
+        - 性能
+        - Demo / Probe / Bench
+        - 文档
+    validations:
+      required: true

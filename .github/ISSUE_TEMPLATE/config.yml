@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 接入指南
+    url: https://github.com/kmgcc/melismakit/blob/main/Documentation/INTEGRATION.md
+    about: 生命周期、时钟、Seek 与多 surface
+  - name: 配置参考
+    url: https://github.com/kmgcc/melismakit/blob/main/Documentation/CONFIGURATION.md
+    about: 全部配置项、默认值与常用组合
+  - name: 贡献指南
+    url: https://github.com/kmgcc/melismakit/blob/main/CONTRIBUTING.md
+    about: 开发、测试、提交与发布流程

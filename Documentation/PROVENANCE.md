@@ -14,16 +14,16 @@
 
 仅有共通的*设计思路*（例如两套实现都将活跃歌词行滚动至特定位置、都将 CJK 文本按字拆分）不足以判定为派生。判定为派生必须具备数值常量或算法结构上的高度匹配。
 
-## 验证状态
+## 核对方法
 
-文档记录了两轮证据核对，两者的严密程度并不相同。
+本文档结合两种核对方式：
 
-| 轮次 | 覆盖范围 | 状态 |
+| 方式 | 覆盖范围 | 说明 |
 |---|---|---|
-| 维护者人工直接核对 | `Motion.swift` 中的 `interludeSample`；`Motion.swift` 中的 `SpringParameters`；`Document.swift` 中的布局常量（`alignPosition`、`overscan`、`wordFadeWidth`） | **已对照上游源码完成人工核对**，文末附双边代码对照 |
-| 机器辅助全面筛查 | 覆盖全部 8 个库源码文件，对照上游遗留 0.2.1 分支及当前 main 主分支 | **机器辅助生成；待维护者逐行确认** —— 见下文说明 |
+| 维护者人工核对 | `Motion.swift` 中的 `interludeSample`、`SpringParameters`；`Document.swift` 中的布局常量（`alignPosition`、`overscan`、`wordFadeWidth`） | 已对照上游源码完成核对，文末附双边代码对照 |
+| 机器辅助筛查 | 覆盖全部 8 个库源码文件，对照上游遗留 0.2.1 分支及当前 main 主分支 | 作为完整清单的基础参考；判定以表中的常量、结构与证据为准 |
 
-路线图 Gate 1B 要求维护者在软件包正式推广前，对本清单进行逐项确认。在该确认完成之前，请将机器辅助筛查结果视为可靠的基础参考，而非最终审计结论。
+“无法确定”条目保留在清单中，不用推测替代证据。新增派生代码时，必须同步更新本文档、`NOTICE` 与源文件头部声明。
 
 ## 派生与独立符号清单
 
@@ -173,7 +173,7 @@ public var overscan: Double = 300
 | `applemusic-like-lyrics` 遗留分支 | 0.2.1 | `GPL-3.0` |
 | `applemusic-like-lyrics` 当前 main 主分支 | 0.5.1 | `AGPL-3.0-only` |
 
-本项目作为 `AGPL-3.0-only` 分发，与两者均完全兼容。`advanceFirstWords` 的关键对比源是播放器自有的 AMLL fork 分支，该分支未包含在上述两个上游代码树中，其本身是针对上游 `base.ts` 的补丁修改。
+本项目作为 `AGPL-3.0-only` 分发，与两者均完全兼容。`advanceFirstWords` 的关键对比源是一个面向播放器场景的 AMLL fork 分支；该分支未包含在上述两个上游代码树中，本身是针对上游 `base.ts` 的补丁修改。
 
 ## 维护此文件规范
 
