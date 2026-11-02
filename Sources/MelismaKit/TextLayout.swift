@@ -50,6 +50,10 @@ struct GroupTextLayout {
 
 final class TextLayoutEngine {
     private(set) var layoutCount = 0
+    // Reuse the word tokenizer across rows. Constructing one for each word
+    // repeatedly initializes NaturalLanguage's language resources during
+    // the entry reflow on the main thread.
+    private let wordTokenizer = NLTokenizer(unit: .word)
 
     // Phase 2（P2-1）：字体解析缓存。
     // font() 每次调用都会走 NSFontManager.shared.availableMembers(ofFontFamily:)，
@@ -277,7 +281,7 @@ final class TextLayoutEngine {
             }
         }
         if !config.showRuby { for i in line.words.indices { line.words[i].ruby = [] } }
-        var atoms = makeAtoms(line,profile:config.profile,dynamic:dynamic)
+        var atoms = makeAtoms(line,profile:config.profile,dynamic:dynamic,tokenizer:wordTokenizer)
         for i in atoms.indices where atoms[i].word.obscene && config.obscenity != .disabled {
             let chars = Array(atoms[i].word.text)
             atoms[i].word.text = chars.enumerated().map { index,ch in
@@ -442,7 +446,7 @@ private func isCJK(_ text: String) -> Bool {
     text.unicodeScalars.contains { (0x2E80...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value) || (0xF900...0xFAFF).contains($0.value) }
 }
 
-func makeAtoms(_ line: LyricLine, profile: LyricsProfile, dynamic: Bool) -> [TextAtom] {
+func makeAtoms(_ line: LyricLine, profile: LyricsProfile, dynamic: Bool, tokenizer sharedTokenizer: NLTokenizer? = nil) -> [TextAtom] {
     var atoms: [TextAtom] = [], chunk = 0, mergingLatin = false
     // The fall starts when the last authored word highlight has finished, not
     // when a paragraph's container range happens to end.  Imported TTML can
@@ -453,7 +457,7 @@ func makeAtoms(_ line: LyricLine, profile: LyricsProfile, dynamic: Bool) -> [Tex
     let emphasisLineEnd = line.words.map { $0.range.end }.max() ?? line.range.end
     for word in line.words {
         if !dynamic {
-            let tokenizer = NLTokenizer(unit:.word); tokenizer.string = word.text
+            let tokenizer = sharedTokenizer ?? NLTokenizer(unit:.word); tokenizer.string = word.text
             // Include spaces/punctuation as independent nodes, matching the balancing policy.
             var cursor = word.text.startIndex
             tokenizer.enumerateTokens(in:word.text.startIndex..<word.text.endIndex) { range,_ in
@@ -497,7 +501,7 @@ func makeAtoms(_ line: LyricLine, profile: LyricsProfile, dynamic: Bool) -> [Tex
             let begin = i
             while i<atoms.count && isCJK(atoms[i].word.text) && atoms[i].word.ruby.isEmpty { i += 1 }
             let text = atoms[begin..<i].map { $0.word.text }.joined()
-            let tokenizer = NLTokenizer(unit:.word); tokenizer.string = text
+            let tokenizer = sharedTokenizer ?? NLTokenizer(unit:.word); tokenizer.string = text
             var ai = begin
             tokenizer.enumerateTokens(in:text.startIndex..<text.endIndex) { range,_ in
                 var n = text[range].utf16.count; chunk += 1

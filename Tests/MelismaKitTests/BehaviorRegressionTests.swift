@@ -1,9 +1,35 @@
 import AppKit
 import CoreImage
+import NaturalLanguage
 import XCTest
 @testable import MelismaKit
 
 final class BehaviorRegressionTests: XCTestCase {
+    func testReusedTokenizerMatchesFreshTokenizerAcrossLanguages() {
+        let tokenizer = NLTokenizer(unit: .word)
+        let texts = ["我想要自由，hello world", "夜に駆ける、さようなら", "Hello again, 世界！", "한글 노래"]
+        for dynamic in [false, true] {
+            for text in texts + Array(texts.reversed()) {
+                let word = LyricWord(id: "w", text: text, range: .init(0, 2))
+                let line = LyricLine(id: "l", range: .init(0, 2), words: [word], isWordTimed: dynamic)
+                let fresh = makeAtoms(line, profile: .currentPlayer, dynamic: dynamic)
+                let reused = makeAtoms(line, profile: .currentPlayer, dynamic: dynamic, tokenizer: tokenizer)
+                XCTAssertEqual(reused.map(\.word.text), fresh.map(\.word.text), text)
+                XCTAssertEqual(reused.map(\.chunk), fresh.map(\.chunk), text)
+                XCTAssertEqual(reused.map(\.word.range.start), fresh.map(\.word.range.start), text)
+                XCTAssertEqual(reused.map(\.word.range.end), fresh.map(\.word.range.end), text)
+            }
+            let words = texts.enumerated().map { index, text in
+                LyricWord(id: "w\(index)", text: text, range: .init(Double(index), Double(index + 1)))
+            }
+            let mixedLine = LyricLine(id: "mixed", range: .init(0, Double(words.count)), words: words, isWordTimed: dynamic)
+            let fresh = makeAtoms(mixedLine, profile: .currentPlayer, dynamic: dynamic)
+            let reused = makeAtoms(mixedLine, profile: .currentPlayer, dynamic: dynamic, tokenizer: tokenizer)
+            XCTAssertEqual(reused.map(\.word.text), fresh.map(\.word.text))
+            XCTAssertEqual(reused.map(\.chunk), fresh.map(\.chunk))
+        }
+    }
+
     private let fixture = Data("<tt xmlns='http://www.w3.org/ns/ttml'><body><div><p begin='0s' end='3s'><span begin='0s' end='3s'>First</span></p><p begin='3s' end='6s'><span begin='3s' end='6s'>Second</span></p><p begin='6s' end='9s'><span begin='6s' end='9s'>Third</span></p><p begin='9s' end='12s'><span begin='9s' end='12s'>Fourth</span></p></div></body></tt>".utf8)
 
     @MainActor func testBlurTransitionsAndPointerExitDeadline() throws {
