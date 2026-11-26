@@ -280,4 +280,37 @@ final class LayoutTests: XCTestCase {
         let count = view.lastFrame!.layoutCount
         for i in 0...600 { let frame = view.render(at:Double(i)/120); XCTAssertEqual(frame.layoutCount,count); XCTAssertLessThanOrEqual(frame.glyphCacheBytes,1024*1024) }
     }
+
+    func testWrappedLinesNeverStartWithLeadingWhitespace() {
+        let rawWords = [
+            ("If ", 1.0, 1.3), ("you ", 1.3, 1.6), ("draw ", 1.6, 2.0),
+            ("that ", 2.0, 2.4), ("line, ", 2.4, 2.8), ("bae, ", 2.8, 3.2),
+            ("I ", 3.2, 3.4), ("hope ", 3.4, 3.8), ("you ", 3.8, 4.1),
+            ("know ", 4.1, 4.5), ("I'm ", 4.5, 4.8), ("crossing ", 4.8, 5.3),
+            ("it", 5.3, 5.6)
+        ]
+        let words = rawWords.enumerated().map { i, item in
+            LyricWord(id: "w-\(i)", text: item.0, range: .init(item.1, item.2))
+        }
+        let line = LyricLine(id: "line", range: .init(1.0, 5.6), words: words, isWordTimed: true)
+        let group = PreparedGroup(source: .init(main: line), main: line, background: nil)
+        var config = LyricsConfiguration()
+        config.fontSize = 28
+        // Using a narrow width of 240 forces multiple line wraps, mirroring the user-reported view
+        let layout = TextLayoutEngine().group(group, width: 240, config: config, dynamic: true, hasDuet: false).main
+        XCTAssertGreaterThan(layout.words.count, 0)
+
+        // Group placements by their line row (distinct Y origins)
+        let rows = Dictionary(grouping: layout.words, by: { round($0.rect.origin.y * 10) / 10 })
+        XCTAssertGreaterThan(rows.count, 1, "The narrow width must trigger multiple wrapped rows")
+
+        for (_, rowWords) in rows {
+            let sorted = rowWords.sorted { $0.rect.origin.x < $1.rect.origin.x }
+            guard let firstWord = sorted.first else { continue }
+            // The first word on each row must start exactly at x = 0 (no leading whitespace offset)
+            XCTAssertEqual(firstWord.rect.origin.x, 0, accuracy: 0.001, "First word in a wrapped row must start at 0, got \(firstWord.rect.origin.x) for '\(firstWord.atom.word.text)'")
+            let firstPieceText = firstWord.pieces.first?.text ?? ""
+            XCTAssertFalse(firstPieceText.hasPrefix(" "), "First glyph piece must not be or start with a space")
+        }
+    }
 }

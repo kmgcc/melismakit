@@ -313,17 +313,35 @@ final class TextLayoutEngine {
             if breaks.contains(i) && !rows[rows.count-1].isEmpty { rows.append([]) }
             rows[rows.count-1].append(contentsOf:chunks[i])
         }
+        var trimmedRows: [[Int]] = []
+        for var row in rows {
+            while let first = row.first, atoms[first].word.text.allSatisfy(\.isWhitespace) {
+                row.removeFirst()
+            }
+            while let last = row.last, atoms[last].word.text.allSatisfy(\.isWhitespace) {
+                row.removeLast()
+            }
+            if !row.isEmpty {
+                trimmedRows.append(row)
+            }
+        }
+        rows = trimmedRows.isEmpty ? [[]] : trimmedRows
         var y = 0.0
         for row in rows {
             let rowWidth = row.reduce(0) { $0+atomWidths[$1] }
             var x = line.isDuet ? max(0,width-rowWidth) : 0
+            var hasPlacedContentInRow = false
             for i in row {
                 let atom = atoms[i]
-                if atom.word.text == "\n" { y += rowHeight; x = 0; continue }
+                if atom.word.text == "\n" { y += rowHeight; x = 0; hasPlacedContentInRow = false; continue }
                 let w = atomWidths[i]
                 // CTTypesetter is the native escape hatch for a pathological unbreakable token.
                 let text = atom.word.text.trimmingCharacters(in:.whitespacesAndNewlines)
-                if text.isEmpty { x += w; continue }
+                if text.isEmpty {
+                    if hasPlacedContentInRow { x += w }
+                    continue
+                }
+                hasPlacedContentInRow = true
                 let baseRuns = fontRuns(text, config: config, size: fontSize)
                 // 复用 measuredWidth 的缓存：同一文本的预测量（atomWidths）与本处
                 // 的居中宽度只做一次 Core Text 整形。
@@ -412,9 +430,19 @@ final class TextLayoutEngine {
             let typesetter = CTTypesetterCreateWithAttributedString(string)
             var offset = 0
             while offset<string.length {
+                while offset < string.length {
+                    let ch = (text as NSString).character(at: offset)
+                    if let scalar = UnicodeScalar(ch), CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                        offset += 1
+                    } else {
+                        break
+                    }
+                }
+                guard offset < string.length else { break }
                 let count = max(1,CTTypesetterSuggestLineBreak(typesetter,offset,width))
                 let s = (text as NSString).substring(with:NSRange(location:offset,length:min(count,string.length-offset)))
-                let runs = fontRuns(s, config: subConfig, size: subSize)
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                let runs = fontRuns(trimmed, config: subConfig, size: subSize)
                 let lineWidth = runs.reduce(0) { $0 + Self.width($1.text, font: $1.font) }
                 var x = line.isDuet ? max(0,width-lineWidth) : 0
                 for run in runs {
@@ -553,7 +581,17 @@ func balancedBreaks(widths: [Double], texts: [String], width: Double) -> Set<Int
         }
     }
     var result: Set<Int> = [], cursor = 0
-    while cursor<n { cursor = next[cursor]; if cursor<n { result.insert(cursor) } }
+    while cursor<n {
+        let nextIndex = next[cursor]
+        cursor = nextIndex
+        guard cursor < n else { break }
+        while cursor < n && texts[cursor].allSatisfy(\.isWhitespace) {
+            cursor += 1
+        }
+        if cursor < n {
+            result.insert(cursor)
+        }
+    }
     return result
 }
 
